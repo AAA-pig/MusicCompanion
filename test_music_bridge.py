@@ -157,6 +157,17 @@ class JsonlTailerTests(unittest.TestCase):
         self.assertEqual(len(batch.errors), 1)
         tailer.close()
 
+    def test_non_finite_constant_is_null_in_decision_prompt(self):
+        append_record(self.path, {"kind": "session"})
+        tailer = JsonlTailer(self.directory)
+        tailer.poll()
+        with self.path.open("ab") as file:
+            file.write(b'{"kind":"event","type":"energy_rise","evidence":{"delta_db":NaN}}\n')
+        batch = tailer.poll()
+        self.assertEqual(len(batch.records), 1)
+        self.assertIn('"delta_db": null', build_decision_prompt(batch.records))
+        tailer.close()
+
 
 class MusicEventStateTests(unittest.TestCase):
     def test_track_observation_updates_snapshot_without_calling_agent(self):
@@ -309,6 +320,13 @@ class PluginIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 await plugin._analyze_and_send([item()])
                 self.assertEqual(len(provider.calls), 1)
                 self.assertEqual(context.sent, [])
+
+    async def test_non_text_provider_is_rejected_before_model_call(self):
+        plugin = self.plugin()
+        context = FakeContext(SimpleNamespace())
+        plugin.context = context
+        await plugin._analyze_and_send([item()])
+        self.assertEqual(context.sent, [])
 
     async def test_normal_qq_request_receives_only_bounded_snapshot(self):
         plugin = self.plugin(proactive_enabled=False)

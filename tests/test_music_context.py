@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
-from music_context import MusicContext, MusicContextPoller, MusicContextReader, _seconds
+from music_companion.music_context import MusicContext, MusicContextPoller, MusicContextReader, _seconds
 
 
 class FakeSession:

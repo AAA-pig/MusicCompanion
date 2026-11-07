@@ -1,11 +1,11 @@
-"""One-shot GSMTC diagnostic. Run on Windows while NetEase Cloud Music is open."""
+"""一次性 GSMTC 诊断：在 Windows 上打开网易云音乐后运行 music-context。"""
 from __future__ import annotations
 
 import asyncio
 import json
 import sys
 
-from music_context import GSMTCUnavailableError, MusicContextReader
+from ..music_context import GSMTCUnavailableError, MusicContextReader
 
 
 async def main() -> int:

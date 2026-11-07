@@ -1,0 +1,41 @@
+[project]
+name = "music-companion"
+version = "0.2.0"
+description = "网易云音乐本地音频变化检测与 GSMTC 歌曲上下文读取"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.13"
+authors = [{ name = "Yang Chenghan (AAA-pig)" }]
+keywords = ["netease", "music", "wasapi", "gsmtc", "astrbot"]
+classifiers = [
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: Microsoft :: Windows",
+  "License :: OSI Approved :: MIT License",
+]
+dependencies = ["numpy>=2.0"]
+
+[project.optional-dependencies]
+gsmtc = ["winrt-Windows.Media.Control>=4"]
+
+[project.scripts]
+music-monitor = "music_companion.monitor:main"
+music-context = "music_companion.cli.context_check:main"
+music-probe = "music_companion.cli.probe:main"
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/music_companion"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/music_companion/native/ProcessLoopback.cs" = "music_companion/native/ProcessLoopback.cs"
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]

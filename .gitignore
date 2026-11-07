@@ -1,7 +1,16 @@
-.venv/
+# Python
 __pycache__/
 *.py[cod]
-*.exe
+.venv/
+.venv.bak/
+*.egg-info/
+build/
+dist/
+
+# 本地运行产物
 *.wav
 *.jsonl
 evidence/
+music_companion_plugin_trace.jsonl
+ProcessLoopback.exe
+.pytest_cache/

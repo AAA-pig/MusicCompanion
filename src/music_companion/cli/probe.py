@@ -1,9 +1,9 @@
 """Capture only NetEase Cloud Music's process tree; all files stay local.
 
-Python 3.10+ / Windows 11. No pip packages needed.
-  python test_netease_audio.py                     # capture 10 seconds
-  python test_netease_audio.py --seconds 15        # up to 30 seconds
-  python test_netease_audio.py --analyze clip.wav   # no recording
+Windows 11 / Python 3.13。仅依赖标准库。
+  music-probe                       # capture 10 seconds
+  music-probe --seconds 15          # up to 30 seconds
+  music-probe --analyze clip.wav    # no recording
 
 No microphone capture, client modification, login access, or uploads.
 A detected signal is NOT proof of music content, song identity, or sync accuracy.
@@ -17,48 +17,11 @@ import json
 import math
 import os
 from pathlib import Path
+
+from ..capture import ensure_helper, find_cloudmusic_pid
 import subprocess
 import sys
 import wave
-
-BASE = Path(__file__).resolve().parent
-
-
-def find_cloudmusic_pid() -> int:
-    command = (
-        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
-        "@(Get-CimInstance Win32_Process -Filter \"Name='cloudmusic.exe'\" | "
-        "Select-Object ProcessId,ParentProcessId) | ConvertTo-Json -Compress"
-    )
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command", command],
-        capture_output=True, encoding="utf-8-sig", check=True, timeout=20,
-    )
-    rows = json.loads(result.stdout) if result.stdout.strip() else []
-    if isinstance(rows, dict):
-        rows = [rows]
-    ids = {row["ProcessId"] for row in rows}
-    roots = [row["ProcessId"] for row in rows if row["ParentProcessId"] not in ids]
-    if not roots:
-        raise RuntimeError("未找到网易云音乐，请先启动客户端并播放歌曲。")
-    if len(roots) != 1:
-        raise RuntimeError(f"发现多个网易云主进程 {roots}，请用 --pid 指定目标。")
-    return roots[0]
-
-
-def ensure_helper() -> Path:
-    source = BASE / "ProcessLoopback.cs"
-    executable = BASE / "ProcessLoopback.exe"
-    if not executable.exists() or source.stat().st_mtime > executable.stat().st_mtime:
-        compiler = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
-        if not compiler.is_file():
-            raise RuntimeError("未找到系统 .NET Framework x64 C# 编译器。")
-        subprocess.run(
-            [str(compiler), "-nologo", "-platform:x64", "-optimize+", f"-out:{executable}", str(source)],
-            check=True, timeout=30, stdout=sys.stderr,
-        )
-    return executable
-
 
 def dbfs(value: float) -> float | None:
     return round(20 * math.log10(value), 2) if value > 0 else None
@@ -129,7 +92,7 @@ def main() -> int:
     pid = args.pid if args.pid is not None else find_cloudmusic_pid()
     executable = ensure_helper()
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    output = BASE / f"netease_{stamp}.wav"
+    output = Path.cwd() / f"netease_{stamp}.wav"
     print(f"即将录制网易云进程树 PID={pid}，时长 {args.seconds:g} 秒。请确认音乐正在播放。", flush=True)
     print("仅存本地，不录麦克风；不会自动启动或改变音乐播放。", flush=True)
     result = subprocess.run(

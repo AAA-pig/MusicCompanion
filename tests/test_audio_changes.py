@@ -12,9 +12,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-from audio_changes import AudioChangeDetector, DetectorConfig
-from monitor_audio import END_FLAG, PACKET_HEADER, STREAM_HEADER, Reporter, live, read_header, read_packet, sequence_gap
-from music_context import MusicContext
+from music_companion.audio_changes import AudioChangeDetector, DetectorConfig
+from music_companion.monitor import END_FLAG, PACKET_HEADER, STREAM_HEADER, Reporter, live, read_header, read_packet, sequence_gap
+from music_companion.music_context import MusicContext
 
 RATE = 48000
 
@@ -239,9 +239,9 @@ class ProtocolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             reporter = Reporter(Path(directory) / "events.jsonl", True)
             try:
-                with patch("monitor_audio.ensure_helper", return_value=Path("fake.exe")), \
-                     patch("monitor_audio.subprocess.Popen", return_value=FakeProcess()), \
-                     patch("monitor_audio.sys.platform", "win32"), patch("builtins.print"):
+                with patch("music_companion.monitor.ensure_helper", return_value=Path("fake.exe")), \
+                     patch("music_companion.monitor.subprocess.Popen", return_value=FakeProcess()), \
+                     patch("music_companion.monitor.sys.platform", "win32"), patch("builtins.print"):
                     result = live(1, 123, DetectorConfig(), reporter, 0)
                 self.assertEqual(result["audio_seconds"], 0.5)
                 self.assertEqual(result["events"], {"audio_started": 1})
@@ -294,10 +294,10 @@ class MusicContextIntegrationTests(unittest.TestCase):
             path = Path(directory) / "events.jsonl"
             reporter = Reporter(path, True)
             try:
-                with patch("monitor_audio.ensure_helper", return_value=Path("fake.exe")), \
-                     patch("monitor_audio.subprocess.Popen", return_value=process), \
-                     patch("monitor_audio.MusicContextPoller", return_value=poller), \
-                     patch("monitor_audio.sys.platform", "win32"), patch("builtins.print"):
+                with patch("music_companion.monitor.ensure_helper", return_value=Path("fake.exe")), \
+                     patch("music_companion.monitor.subprocess.Popen", return_value=process), \
+                     patch("music_companion.monitor.MusicContextPoller", return_value=poller), \
+                     patch("music_companion.monitor.sys.platform", "win32"), patch("builtins.print"):
                     result = live(1, 123, DetectorConfig(), reporter, 0,
                                   music_context_enabled=True)
             finally:
@@ -324,10 +324,10 @@ class MusicContextIntegrationTests(unittest.TestCase):
             path = Path(directory) / "events.jsonl"
             reporter = Reporter(path, True)
             try:
-                with patch("monitor_audio.ensure_helper", return_value=Path("fake.exe")), \
-                     patch("monitor_audio.subprocess.Popen", return_value=process), \
-                     patch("monitor_audio.MusicContextPoller", return_value=FailingPoller()), \
-                     patch("monitor_audio.sys.platform", "win32"), patch("builtins.print"):
+                with patch("music_companion.monitor.ensure_helper", return_value=Path("fake.exe")), \
+                     patch("music_companion.monitor.subprocess.Popen", return_value=process), \
+                     patch("music_companion.monitor.MusicContextPoller", return_value=FailingPoller()), \
+                     patch("music_companion.monitor.sys.platform", "win32"), patch("builtins.print"):
                     result = live(1, 123, DetectorConfig(), reporter, 0,
                                   music_context_enabled=True)
             finally:
@@ -354,9 +354,9 @@ class LifecycleTests(unittest.TestCase):
         def kill(self): self.returncode = -9
 
     def _invoke(self, process, reporter, *, popen_error=None):
-        with patch("monitor_audio.ensure_helper", return_value=Path("fake.exe")), \
-             patch("monitor_audio.subprocess.Popen", return_value=process, side_effect=popen_error), \
-             patch("monitor_audio.sys.platform", "win32"), patch("builtins.print"):
+        with patch("music_companion.monitor.ensure_helper", return_value=Path("fake.exe")), \
+             patch("music_companion.monitor.subprocess.Popen", return_value=process, side_effect=popen_error), \
+             patch("music_companion.monitor.sys.platform", "win32"), patch("builtins.print"):
             return live(1, 123, DetectorConfig(), reporter, 0)
 
     def test_popen_failure_preserves_exception(self):
@@ -364,7 +364,7 @@ class LifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             reporter = Reporter(Path(directory) / "events.jsonl", True)
             try:
-                with patch("monitor_audio.threading.Thread.start") as start:
+                with patch("music_companion.monitor.threading.Thread.start") as start:
                     with self.assertRaises(OSError) as caught:
                         self._invoke(None, reporter, popen_error=error)
                 self.assertIs(caught.exception, error)
@@ -376,7 +376,7 @@ class LifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             reporter = Reporter(Path(directory) / "events.jsonl", True)
             try:
-                with patch("monitor_audio.threading.Thread.start") as start:
+                with patch("music_companion.monitor.threading.Thread.start") as start:
                     result = self._invoke(None, reporter, popen_error=KeyboardInterrupt())
                 self.assertTrue(result["interrupted"])
                 self.assertEqual(result["audio_seconds"], 0)
@@ -401,7 +401,7 @@ class LifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             reporter = Reporter(Path(directory) / "events.jsonl", True)
             try:
-                with patch("monitor_audio.threading.Thread.start", new=start):
+                with patch("music_companion.monitor.threading.Thread.start", new=start):
                     if isinstance(error, KeyboardInterrupt):
                         result = self._invoke(process, reporter)
                         self.assertTrue(result["interrupted"])
@@ -473,7 +473,7 @@ class LifecycleTests(unittest.TestCase):
                 original_write(record)
 
             try:
-                with patch("monitor_audio.queue.Queue", queue_type), patch.object(reporter, "write", side_effect=write):
+                with patch("music_companion.monitor.queue.Queue", queue_type), patch.object(reporter, "write", side_effect=write):
                     result = self._invoke(process, reporter)
             finally:
                 reporter.close()

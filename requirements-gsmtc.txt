@@ -1,3 +1,0 @@
-# Optional dependency for the Windows GSMTC metadata reader only.
-# Install this separately; the audio detector itself does not need PyWinRT.
-winrt-Windows.Media.Control>=4

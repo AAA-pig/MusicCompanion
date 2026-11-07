@@ -1,7 +1,7 @@
 """Local real-time changes from NetEase process audio or a PCM16 WAV.
 
-Run with .venv/Scripts/python.exe monitor_audio.py --seconds 60
-Replay: .venv/Scripts/python.exe monitor_audio.py --wav recording.wav
+Run with: music-monitor --seconds 60   (uv run music-monitor ...)
+Replay:   music-monitor --wav recording.wav
 Continuous (until Ctrl+C): --seconds 0. Use --json for JSONL stdout.
 Default logs contain features/events, not raw audio. No network/API calls.
 """
@@ -23,9 +23,9 @@ import time
 from typing import BinaryIO
 import wave
 
-from audio_changes import AudioChangeDetector, ChangeEvent, DetectorConfig
-from music_context import MusicContextPoller
-from test_netease_audio import BASE, ensure_helper, find_cloudmusic_pid
+from .audio_changes import AudioChangeDetector, ChangeEvent, DetectorConfig
+from .music_context import MusicContextPoller
+from .capture import ensure_helper, find_cloudmusic_pid
 
 STREAM_HEADER = struct.Struct("<4sIII")
 PACKET_HEADER = struct.Struct("<IId")
@@ -388,7 +388,7 @@ def main() -> int:
     try:
         config = DetectorConfig(silence_dbfs=args.silence_db, resume_dbfs=args.silence_db + 8,
                                 energy_rise_db=args.rise_db, energy_drop_db=args.drop_db)
-        path = args.log or BASE / ("audio_events_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f") + ".jsonl")
+        path = args.log or Path.cwd() / ("audio_events_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f") + ".jsonl")
         reporter = Reporter(path, args.json)
         print(f"事件日志：{path.resolve()}\n仅检测声音变化；事件时间不是歌曲播放位置。Ctrl+C 停止。", file=sys.stderr, flush=True)
         summary = replay(args.wav, config, reporter) if args.wav else live(

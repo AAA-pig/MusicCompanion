@@ -1,0 +1,2637 @@
+NETEASE MUSIC COMPANION — UPDATED ALL IN ONE
+UTF-8 文本；源码请使用 ZIP 中的独立文件。
+
+========================================================================
+BEGIN FILE: AI_HANDOFF.txt
+BYTES: 16549
+SHA256: 2b0450bab1768304cc5e70737391c18f390f65444e223e32266c3888ae559725
+========================================================================
+网易云音乐本地音频变化检测器 — AI 接手说明
+打包日期：2026-11-07
+交付类型：可审阅、可继续开发的源码包；不是免安装应用。
+
+一、先读什么
+
+1. AI_HANDOFF.txt：本说明，包含已完成内容、运行方式与明确边界。
+2. ASK_NEXT_AI.txt：可以直接粘贴给其他 AI 的接手提示词。
+3. ALL_IN_ONE.txt：本说明、提示词、全部源码及验证摘要的整合版本。
+   不能解压 ZIP 的 AI 可直接读取这一份 UTF-8 文本；它不是可执行程序。
+4. 原始源码文件：需要运行或修改项目时使用这些文件，不要运行整合文本。
+5. evidence/：实际验证摘要、事件日志及打包时测试结果。
+6. manifest.sha256：除清单自身以外，各个归档文件的 SHA-256 校验值。
+
+二、项目目标与当前完成度
+
+最终目标是“AI 陪用户边听网易云音乐边聊天”，而不是播放结束后写乐评。
+用户希望对关键音乐变化作出及时反应，不能接受超过 30 秒的体验延迟。
+原计划采用 Python 后端和大模型 API，可选本地小模型；用户表示已有第三方
+网易云接口的歌单与歌曲信息能力，但本源码包没有集成或验证这些第三方接口。
+
+当前已完成的是第一块基础能力：仅在本机捕获网易云进程树的声音，连续计算
+轻量声学特征，输出变化候选事件。没有实现“完整 AI 陪听助手”。
+
+已完成：
+- Windows 进程树 WASAPI loopback 音频捕获。
+- 48 kHz、双声道、16-bit PCM 的持续流与受限时长 WAV 录音探针。
+- 持续安静、声音开始/恢复、能量升降、频带分布/音色变化、节奏密度变化候选。
+- 阈值确认、迟滞、同类事件冷却及全局变化事件冷却。
+- 捕获间断、积压和过期音频的检测与重置，不把缺失数据伪造为静音。
+- 本地 JSONL 事件日志、控制台读数、已有 WAV 的离线快速回放。
+- 可直接调用的 Python 检测器、自动化测试、Windows 双击运行入口。
+
+尚未实现：
+- 歌名识别、歌词识别、歌曲绝对播放进度或网易云播放控制。
+- 自动副歌识别、情绪理解、乐器识别或完整音乐语义分析。
+- 大模型调用、语音合成、语音聊天、语义模型、用户记忆或数据库。
+- 第三方网易云 API、登录、账户信息或客户端逆向。
+
+三、不可混淆的边界
+
+1. 检测到能量上升，不等于识别到了副歌。
+2. silence_start 只表示持续低电平，不证明用户按了暂停。
+3. capture_stalled 表示收不到 PCM，不把它解释为音乐安静。
+4. event_time_s 是阈值候选首次满足的时刻；detected_at_s 包含确认窗口。
+5. 时间轴是本次采集/回放会话的时间，不是歌曲进度。
+6. 音频包处理耗时不是“扬声器发声到 AI 开口”的端到端延迟。
+7. 模块是启发式检测器，候选事件可能误报或漏报，不能当成置信概率。
+8. 进程包含过滤已启用，但尚未完成其它应用同时发声的对照隔离实验。
+9. 不采集麦克风、不注入或修改客户端、不访问登录态，不调用网络或模型 API。
+   依赖安装可能需要联网；音频检测本身不联网。
+10. 实时 monitor 模式默认不保存原始音频。test_netease_audio.py 的录音模式
+    则会生成本地 WAV 和分析 JSON，必须区分这两个入口。
+
+四、文件职责
+
+ProcessLoopback.cs
+  C# 原生 Windows 捕获器与 COM 接口声明。仅允许名为 cloudmusic 的目标进程。
+  以进程树包含模式捕获；支持二进制 stdout 流或 1～30 秒 WAV 文件。
+  使用系统 .NET Framework x64 编译器，不依赖 dotnet SDK。
+
+test_netease_audio.py
+  早期音频录制/分析探针，也提供 find_cloudmusic_pid() 和 ensure_helper()。
+  monitor_audio.py 依赖这两个函数。虽然以 test_ 开头，它不是 unittest 套件；
+  不要误删。PID 自动选择网易云根进程；多个根进程时要求 --pid。
+  首次运行实时入口时会按需将 ProcessLoopback.cs 编译成同目录的 exe。
+
+music_context.py
+  新增的 GSMTC 只读歌曲上下文读取器。通过 Windows.Media.Control 查询当前系统媒体会话，
+  默认仅接受 source_app_user_model_id 中包含 cloudmusic 的会话。提供歌曲名、歌手、
+  专辑、播放状态、系统时间线位置（若 API 提供）及 watch() 变化迭代器。
+  不捕获音频、不控制播放器；没有时间线时 position_seconds 保持 null，不伪造进度。
+  PyWinRT 导入为惰性导入，因此原检测器在未安装 PyWinRT 时仍可运行。
+
+check_music_context.py
+  Windows GSMTC 单次诊断入口，输出 JSON；用于先验证当前网易云客户端是否暴露会话。
+
+requirements-gsmtc.txt
+  可选 PyWinRT 依赖，仅 GSMTC 模块需要；与原 requirements.txt 分开，避免影响音频检测器。
+
+test_music_context.py
+  GSMTC 读取器的模拟对象单元测试；不要求 Windows、不连接真实网易云客户端。
+
+audio_changes.py
+  无 Windows 捕获依赖的状态化检测核心；NumPy 特征提取与事件判定。
+  AudioChangeDetector、DetectorConfig、ChangeEvent 是主要可复用接口。
+
+monitor_audio.py
+  实时/回放 CLI、NCM1 流解析、子进程与线程清理、有界队列、过期数据处理、
+  控制台和 JSONL 日志输出。实时模式启动 C# 子进程。
+
+test_audio_changes.py
+  37 个 unittest 方法，含确定性合成音频、协议、丢包和启动清理回归测试。
+  实时协议测试使用模拟进程，不会打开麦克风或实际录音。
+
+requirements.txt
+  当前锁定 numpy==2.5.4；该版本已经在本机 Python 3.13.9 中安装并测试。
+
+start_detection.cmd
+  使用项目内 .venv，启动连续检测。不会自动创建环境或安装依赖。
+
+evidence/verification_results.json
+  开发阶段验证摘要；其中 real_runs 是早期运行记录，final_live_smoke 和
+  final_replay 是最终修复后的验证。不要将早期记录当成最终修订的实测。
+
+evidence/*.jsonl
+  与上述摘要对应的事件/特征日志，不含 PCM。回放日志里的绝对 input 路径
+  在本包副本中仅保留文件名；原始日志未修改。原 WAV 没有打包。
+
+evidence/package_checks.json、evidence/package_unittest.txt
+  打包阶段对源码副本的测试与编译检查结果；本地环境下可复验，
+  不能证明其它机器或不同 Windows/网易云版本一定兼容。
+
+五、运行方式（Windows CMD，先在解压后的项目目录打开终端）
+
+推荐环境：64 位 Windows 11、Python 3.13、可用的系统 .NET Framework x64 csc.exe。
+本机验证环境为 Windows 11 build 26200 / Python 3.13.9 / NumPy 2.5.4 /
+网易云音乐 3.1.42.205594。未测试所有 Windows 版本，不承诺 Windows 10 兼容。
+离线检测核心不依赖 Windows 捕获，但整包未做其它系统的兼容性验证。
+
+首次准备（需要本机 Python 已安装；pip 安装可能联网）：
+  python -m venv .venv
+  .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+先运行不会录音的单元测试：
+  .venv\Scripts\python.exe -m unittest -v test_audio_changes
+
+播放网易云音乐，再检测 15 秒：
+  .venv\Scripts\python.exe monitor_audio.py --seconds 15
+
+持续运行，Ctrl+C 停止：
+  .venv\Scripts\python.exe monitor_audio.py --seconds 0
+  或者双击 start_detection.cmd。
+
+输出机器可读 JSONL（stdout）；提示信息走 stderr：
+  .venv\Scripts\python.exe monitor_audio.py --seconds 15 --json
+
+指定新日志名称（已存在会拒绝覆盖，每次复测换新名称）：
+  .venv\Scripts\python.exe monitor_audio.py --seconds 15 --log run_001.jsonl
+
+离线回放自己的未压缩 PCM16 WAV（不启动实时捕获）：
+  .venv\Scripts\python.exe monitor_audio.py --wav "your_clip.wav" --json
+  your_clip.wav 是需要自行提供的输入，不在本包内。
+
+只有确实需要新录音时才使用以下命令；它会保存本地 WAV：
+  .venv\Scripts\python.exe test_netease_audio.py --seconds 10
+
+实时入口的 --seconds 默认 60，0 表示持续到中断，有限时长允许 1～3600。
+--meter-interval 0 关闭状态读数；--silence-db、--rise-db、--drop-db 可调阈值。
+更完整的参数见 monitor_audio.py --help。
+
+没有 .venv 时双击启动脚本会提示先安装环境。这不是打包缺文件：
+为便于 AI 阅读和跨目录迁移，ZIP 特意排除了虚拟环境与编译产物。
+
+六、数据流与接口
+
+网易云 cloudmusic 进程树
+  -> Windows WASAPI Process Loopback（ProcessLoopback.cs）
+  -> NCM1 二进制 stdout 管道
+  -> monitor_audio.py 读取线程 + 最多 64 包队列
+  -> AudioChangeDetector.feed_pcm16()
+  -> ChangeEvent
+  -> Reporter / JSONL / 控制台
+
+核心调用示例（pcm_bytes 必须由上游提供，不是字符串）：
+  from audio_changes import AudioChangeDetector
+  detector = AudioChangeDetector(sample_rate=48000, channels=2)
+  events = detector.feed_pcm16(pcm_bytes)
+  for event in events:
+      print(event.to_dict())
+
+每个流保留同一个 detector，不能每次来一个音频块就新建实例。
+PCM 必须为小端、有符号 16-bit、按声道交错，长度必须是完整音频帧的倍数。
+feed(samples) 也接受归一化浮点数组，形状为 (frames, channels)。
+上游出现丢包后调用 reset(at_seconds, reason)；重置时间不能倒退。
+
+ChangeEvent 字段：
+  type                  事件名
+  event_time_s          首次满足候选条件的会话时间
+  detected_at_s         确认并输出时的会话时间
+  confirmation_seconds  to_dict() 添加的确认间隔
+  stream_epoch          每次 reset 增加
+  evidence              RMS、能量差、频谱距离或节奏密度等声学证据
+  time_basis            固定 capture_session_seconds
+
+实时/回放日志按 kind 区分 session、event、status、summary、error。
+不是每一行都是事件；下游必须先检查 kind。
+
+七、NCM1 原生流协议
+
+所有数值使用 little-endian，stdout 不得混入文字。
+流头共 16 字节，Python 格式 <4sIII：
+  magic=b"NCM1"，sample_rate=48000，channels=2，bits_per_sample=16。
+
+每个数据包头共 16 字节，格式 <IId：
+  uint32 frames
+  uint32 flags
+  double received_seconds
+随后为 frames * channels * 2 字节 PCM。
+
+flags 低三位保持 WASAPI 标志：1=数据间断，2=显式静音包，4=时间戳错误。
+frames=0、flags=0 是心跳，没有 PCM；心跳不表示静音。
+frames=0、flags=0x80000000 是正常结束。
+received_seconds 是从原生 Start 起计时的接收时间，不是播放软件时间轴。
+原生诊断/汇总 JSON 在 stderr；流读取必须支持不完整的分段 read。
+
+首包用 received_seconds - packet_duration 近似锚定采集起点。
+读取线程对真正的 PCM 包连续编号；消费者发现实际序号缺口时才重置，
+不能用生产者的累计丢包数提前重置仍在处理的连续包。
+队列过载丢弃最旧包，超过 0.5 秒队列年龄的包也不再分析。
+连续 1 秒无 PCM 报 capture_stalled；恢复后重置而不是补静音。
+
+八、默认检测参数与行为
+
+- 50 ms 特征步长，保留约 8 秒历史。
+- RMS 计算响度，频带归一化功率描述音色，瞬态密度描述节奏变化候选。
+- 对声道功率求平均，而不是直接混合波形，避免反相双声道互相抵消。
+- 安静阈值 -60 dBFS，持续 0.7 秒确认。
+- 恢复阈值 -52 dBFS，持续 0.25 秒确认。
+- 基线窗口最多 4 秒，排除最近 1 秒，至少要积累 2 秒有效基线。
+- 最近窗口 0.4 秒；能量上升默认 +6 dB，下降默认 -8 dB。
+- 音色变化使用频带分布的总变差距离，默认阈值 0.38。
+- 节奏使用 1.5 秒近期瞬态窗口，不是精确 BPM 或拍点识别。
+- 同类变化默认冷却 8 秒；不同变化之间至少间隔 1.5 秒。
+- 初次启动/重置需要积累基线，不能立即给出有依据的编配变化。
+
+九、已有验证与限制
+
+开发阶段最终自动测试：37/37 通过。
+队列丢包和线程启动中断的 3 个回归场景各重复 10 次，30/30 通过。
+覆盖静音/恢复、短暂波动、能量、音色、节奏、反相立体声、输入校验、
+数据块边界一致性、历史有界、协议截断、初始/中途丢包以及子进程清理。
+
+实机：
+- 用户曾确认 9.98 秒录音的声音正确。该录音出于体积与隐私考虑未打包。
+- 早期 15 秒实时流收到 14.98 秒音频，无报告的丢包或间断。
+- 最终修复后的 5 秒实时检测收到 4.75 秒近静音音频，触发一次 silence_start；
+  无队列丢包、过期包和原生间断，退出后未发现残留捕获器。
+- 最终回放先前录音，输出 audio_started 和 rhythm_change 候选；
+  JSON stdout 与落盘日志一致。不是对音乐事件做过人工标注的准确率评测。
+- 验证过已有 WAV/事件日志不被覆盖、消费者管道关闭后原生捕获器退出。
+
+合成受控信号中的示例检测延迟：安静 0.70 秒、恢复 0.25 秒、能量上升
+0.65 秒、音色变化 0.75 秒、节奏变化 1.05 秒。不能推广为真实音乐或
+AI 语音回答的保证；这不是“已经实现低延迟陪聊”。
+
+仍未验证：跨应用声音对照隔离、人工实时暂停/恢复流程、小时级稳定性、
+不同 Windows/网易云/音频设备版本以及完整 AI 语音链路延迟。
+没有包含私有录音，所以接手者可以重跑合成测试，但无法只靠本包重放
+历史音乐实测；应自行准备合法且允许使用的 PCM16 音频。
+
+十、后续开发建议（尚未实现，也不是自动授权）
+
+建议先补可重复的实机暂停/恢复、其它应用同时发声、设备切换和长时间
+运行测试，测误报与漏报，再考虑加入“变化事件 -> 语义分析/LLM -> 回复”层。
+保留本地便宜检测作触发器，避免把每个 50 ms 音频块都发送给大模型。
+
+如果将来要联网发送音频、接入外部模型、控制播放器或持久化用户资料，
+先明确授权、数据范围、费用和实际接口；当前包不包含这些权限或 API 密钥。
+不要虚构网易云提供了可靠实时播放进度，也不要把候选变化直接标成副歌。
+
+修改时特别保留：
+- cloudmusic 进程范围限制；不要改成整个桌面或麦克风采集。
+- PCM 管道 stdout 的纯二进制协议和 JSON 模式的纯 JSONL stdout。
+- 心跳/缺包与真正静音之间的区别。
+- 按消费者实际包序号定位间断。
+- 首包时钟原点与 reset 后的单调时间。
+- Popen 或线程启动异常、Ctrl+C、消费者断连时的退出清理。
+- 不覆盖用户已有录音或日志。
+
+十一、打包处理说明
+
+源码文件以原始字节复制，没有为了打包修改算法或运行逻辑。
+仅对本包的回放日志副本做 input 路径最小化：本机绝对目录替换为文件名。
+其余事件、时间与测量值保留。历史 PID 只用于说明当次运行，不可硬编码复用。
+排除 .venv、__pycache__、.pyc、.exe、所有原始 WAV、账户文件及无关材料。
+原有项目文件和录音仍留在原工作目录，本次没有删除或覆盖它们。
+
+
+
+十二、GSMTC 歌曲上下文模块（新增，尚待 Windows 实机验证）
+
+新增 music_context.py，采用 Windows Global System Media Transport Controls（GSMTC）
+只读当前媒体会话。先先安装可选依赖：
+  .venv\Scripts\python.exe -m pip install -r requirements-gsmtc.txt
+再在网易云正在播放时运行：
+  .venv\Scripts\python.exe check_music_context.py
+
+输出字段包括 title、artist、album、playback_status、position_seconds、
+position_source、position_confidence、duration_seconds、source_app_id。
+默认只接受 source_app_user_model_id 含 cloudmusic 的会话；如果实际 Windows
+环境返回不同 app id，应先人工核实后再调整 source_app_tokens，不要直接关闭过滤。
+
+position_seconds 仅在 GSMTC timeline 实际提供时填写；它是系统报告的位置，
+不是本项目独立测得的真值。缺失时返回 null，不使用采集会话时长冒充歌曲进度。
+本模块暂未接入 monitor_audio.py，也未改变音频检测器；下一步应在目标 Windows
+机器验证歌名/播放状态/position 是否稳定更新，再将快照包装进统一 MusicContext。
+
+新增测试：
+  .venv\Scripts\python.exe -m unittest -v test_audio_changes test_music_context
+END FILE: AI_HANDOFF.txt
+
+========================================================================
+BEGIN FILE: ASK_NEXT_AI.txt
+BYTES: 1810
+SHA256: 2426847a088d5fa08c932d0c24da1cf488ed3f4ffe9131528254042643610ea0
+========================================================================
+请接手这个“网易云音乐本地音频变化检测器”项目。
+
+先完整阅读 AI_HANDOFF.txt，再阅读源码与 evidence/verification_results.json。
+如果我只上传了 ALL_IN_ONE.txt，它已经包含交接说明、源码和验证摘要。
+
+项目最终想实现“AI 边听歌边聊天”，但现在只完成本地音频捕获与声学变化候选检测。
+请不要把尚未实现的副歌/情绪识别、歌曲实时进度或 AI 语音回复说成已经完成。
+
+请先给出：
+1. 你对现有架构、运行入口和事件接口的理解。
+2. 你发现的具体问题或风险，引用实际文件名和代码位置，区分已验证与推测。
+3. 基于现有代码的最小下一步建议，不要未经说明推倒重写。
+
+后续我指定修改目标后，再按该目标实现并运行测试。如果没有本地执行工具，
+请明确说明只能静态审阅，不要声称运行成功或实机验证成功。
+
+需要保留的边界：仅捕获 cloudmusic 进程树，不采集麦克风或整个桌面；
+不访问登录信息、不修改网易云客户端、不自动上传音频、不覆盖已有录音或日志。
+缺少音频数据不等于静音，变化候选不等于副歌，采集时间不等于歌曲播放进度。
+联网、调用收费模型、增加持久化个人资料或控制播放器前，先与我确认范围。
+
+测试入口为：
+  .venv\Scripts\python.exe -m unittest -v test_audio_changes
+
+原始录音和 .venv 没有包含在包内；准备环境和回放输入的方法在交接说明中。
+
+
+本轮已新增 music_context.py、check_music_context.py、test_music_context.py。
+先运行模拟测试，再在 Windows + 网易云播放时运行 check_music_context.py；
+不要声称 GSMTC 实机兼容已验证，除非用户提供实际输出。
+END FILE: ASK_NEXT_AI.txt
+
+========================================================================
+BEGIN FILE: ProcessLoopback.cs
+BYTES: 19480
+SHA256: 9ed95742ba68f0022beeb9002a6811a389ce5ebde4ffe6af89a51160dad77fa5
+========================================================================
+// Local-only Windows process-tree loopback probe. No microphone or network access.
+// Build with the system .NET Framework x64 csc.exe. Capture is restricted to cloudmusic.
+using System;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+
+[ComImport, Guid("1CB9AD4C-DBFA-4C32-B178-C2F568A703B2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IAudioClient
+{
+    [PreserveSig] int Initialize(int mode, uint flags, long duration, long period, ref WaveFormat format, IntPtr session);
+    [PreserveSig] int GetBufferSize(out uint frames);
+    [PreserveSig] int GetStreamLatency(out long latency);
+    [PreserveSig] int GetCurrentPadding(out uint frames);
+    [PreserveSig] int IsFormatSupported(int mode, IntPtr format, out IntPtr closest);
+    [PreserveSig] int GetMixFormat(out IntPtr format);
+    [PreserveSig] int GetDevicePeriod(out long normal, out long minimum);
+    [PreserveSig] int Start();
+    [PreserveSig] int Stop();
+    [PreserveSig] int Reset();
+    [PreserveSig] int SetEventHandle(IntPtr handle);
+    [PreserveSig] int GetService(ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object service);
+}
+
+[ComImport, Guid("C8ADBD64-E71E-48A0-A4DE-185C395CD317"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IAudioCaptureClient
+{
+    [PreserveSig] int GetBuffer(out IntPtr data, out uint frames, out uint flags, out ulong devicePosition, out ulong qpcPosition);
+    [PreserveSig] int ReleaseBuffer(uint frames);
+    [PreserveSig] int GetNextPacketSize(out uint frames);
+}
+
+[ComImport, Guid("72A22D78-CDE4-431D-B8CC-843A71199B6D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IActivateAudioInterfaceAsyncOperation
+{
+    [PreserveSig] int GetActivateResult(out int result, [MarshalAs(UnmanagedType.IUnknown)] out object activated);
+}
+
+[ComVisible(true), Guid("41D949AB-9862-444A-80F6-C261334DA5EB"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IActivateAudioInterfaceCompletionHandler
+{
+    [PreserveSig] int ActivateCompleted(IActivateAudioInterfaceAsyncOperation operation);
+}
+
+[ComVisible(true), Guid("94EA2B94-E9CC-49E0-C0FF-EE64CA8F5B90"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IAgileObject { }
+
+[ComVisible(true), ClassInterface(ClassInterfaceType.None)]
+public sealed class ActivationHandler : IActivateAudioInterfaceCompletionHandler, IAgileObject
+{
+    public readonly ManualResetEvent Done = new ManualResetEvent(false);
+    public object Activated;
+    public int Error;
+    public int ActivateCompleted(IActivateAudioInterfaceAsyncOperation operation)
+    {
+        try
+        {
+            int activationResult;
+            int hr = operation.GetActivateResult(out activationResult, out Activated);
+            Error = hr < 0 ? hr : activationResult;
+        }
+        catch (Exception ex) { Error = Marshal.GetHRForException(ex); }
+        finally { Done.Set(); }
+        return 0;
+    }
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 2)]
+public struct WaveFormat
+{
+    public ushort Tag, Channels;
+    public uint SamplesPerSecond, AverageBytesPerSecond;
+    public ushort BlockAlign, BitsPerSample, ExtraSize;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct ActivationParams
+{
+    public int ActivationType;
+    public uint TargetProcessId;
+    public int ProcessLoopbackMode;
+}
+
+// This probe is compiled x64: PROPVARIANT's BLOB pointer is at offset 16.
+[StructLayout(LayoutKind.Explicit, Size = 24)]
+public struct PropVariant
+{
+    [FieldOffset(0)] public ushort Type;
+    [FieldOffset(8)] public uint BlobSize;
+    [FieldOffset(16)] public IntPtr BlobData;
+}
+
+public static class ProcessLoopback
+{
+    [DllImport("Mmdevapi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int ActivateAudioInterfaceAsync(string device, ref Guid iid,
+        ref PropVariant parameters, IActivateAudioInterfaceCompletionHandler handler,
+        out IActivateAudioInterfaceAsyncOperation operation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int standardHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetFileType(IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool WriteFile(IntPtr handle, IntPtr buffer, uint bytes,
+        out uint written, IntPtr overlapped);
+
+    private static void Check(int hr, string stage)
+    {
+        if (hr < 0) throw new COMException(stage + " failed: 0x" + hr.ToString("X8"), hr);
+    }
+
+    private static volatile bool stopRequested;
+
+    private static void WriteHeader(BinaryWriter writer, uint bytes)
+    {
+        writer.Seek(0, SeekOrigin.Begin);
+        writer.Write(Encoding.ASCII.GetBytes("RIFF")); writer.Write(checked(36u + bytes));
+        writer.Write(Encoding.ASCII.GetBytes("WAVEfmt ")); writer.Write(16u);
+        writer.Write((ushort)1); writer.Write((ushort)2); writer.Write(48000u);
+        writer.Write(192000u); writer.Write((ushort)4); writer.Write((ushort)16);
+        writer.Write(Encoding.ASCII.GetBytes("data")); writer.Write(bytes);
+        writer.Flush();
+    }
+
+    private static void CheckOutputPipe()
+    {
+        // Framework's console stream can swallow broken-pipe errors. A zero-byte
+        // native probe emits no protocol bytes but detects a reader/parent exit,
+        // including during silence via heartbeat writes. No recorder is left running.
+        IntPtr handle = GetStdHandle(-11);
+        if (GetFileType(handle) != 3u) return; // FILE_TYPE_PIPE only; not files/consoles.
+        uint written;
+        if (!WriteFile(handle, IntPtr.Zero, 0, out written, IntPtr.Zero))
+        {
+            int error = Marshal.GetLastWin32Error();
+            throw new IOException("Output pipe write failed: Win32 error " +
+                error.ToString(CultureInfo.InvariantCulture) + ".");
+        }
+    }
+
+    private static void WriteStreamHeader(BinaryWriter writer)
+    {
+        // BinaryWriter writes these numeric fields in little-endian order.
+        writer.Write(Encoding.ASCII.GetBytes("NCM1"));
+        writer.Write(48000u); writer.Write(2u); writer.Write(16u);
+        writer.Flush();
+        CheckOutputPipe();
+    }
+
+    private static void WriteStreamPacket(BinaryWriter writer, uint frames, uint flags,
+        double receivedSeconds, byte[] pcm)
+    {
+        writer.Write(frames); writer.Write(flags); writer.Write(receivedSeconds);
+        if (pcm != null) writer.Write(pcm);
+        writer.Flush();
+        CheckOutputPipe();
+    }
+
+    [MTAThread]
+    public static int Main(string[] args)
+    {
+        Console.OutputEncoding = new UTF8Encoding(false);
+        if (args.Length != 3)
+        {
+            Console.Error.WriteLine("Usage: ProcessLoopback.exe <cloudmusic-pid> <seconds:1..30> <new-output.wav>");
+            Console.Error.WriteLine("   or: ProcessLoopback.exe --stream <cloudmusic-pid> <seconds:0 or 1..3600>");
+            return 2;
+        }
+        try
+        {
+            bool streamMode = string.Equals(args[0], "--stream", StringComparison.Ordinal);
+            uint pid = uint.Parse(args[streamMode ? 1 : 0], CultureInfo.InvariantCulture);
+            double seconds = double.Parse(args[streamMode ? 2 : 1], CultureInfo.InvariantCulture);
+            if (double.IsNaN(seconds) || double.IsInfinity(seconds) ||
+                (streamMode ? (seconds != 0 && (seconds < 1 || seconds > 3600)) :
+                    (seconds < 1 || seconds > 30)))
+                throw new ArgumentException(streamMode ?
+                    "Duration must be 0 (until stopped) or between 1 and 3600 seconds." :
+                    "Duration must be between 1 and 30 seconds.");
+            using (Process target = Process.GetProcessById(checked((int)pid)))
+            {
+                if (!string.Equals(target.ProcessName, "cloudmusic", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("Only a cloudmusic process may be captured by this probe.");
+            }
+            if (IntPtr.Size != 8) throw new PlatformNotSupportedException("Use the x64 build.");
+            return Capture(pid, seconds, streamMode ? null : Path.GetFullPath(args[2]), streamMode);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex.GetType().Name + ": " + ex.Message);
+            return 1;
+        }
+    }
+
+    private static int Capture(uint pid, double seconds, string output, bool streamMode)
+    {
+        IAudioClient audio = null;
+        IAudioCaptureClient capture = null;
+        IActivateAudioInterfaceAsyncOperation operation = null;
+        ActivationHandler handler = new ActivationHandler();
+        IntPtr activationMemory = IntPtr.Zero;
+        EventWaitHandle ready = new EventWaitHandle(false, EventResetMode.AutoReset);
+        bool running = false;
+        object captureGate = new object();
+        ulong dataBytes = 0, packetCount = 0, discontinuities = 0, silentPackets = 0, timestampErrors = 0;
+        double firstPacketMs = -1, maxPacketGapMs = 0, previousPacketMs = -1;
+        Stopwatch clock = new Stopwatch();
+        stopRequested = false;
+        ConsoleCancelEventHandler cancelHandler = delegate(object sender, ConsoleCancelEventArgs e)
+        {
+            // A second Ctrl+C may terminate a helper whose output pipe is blocked.
+            if (stopRequested) return;
+            e.Cancel = true;
+            stopRequested = true;
+            // Never hold this gate during output: stop native capture even if stdout stalls.
+            lock (captureGate)
+            {
+                if (running && audio != null)
+                {
+                    try
+                    {
+                        Check(audio.Stop(), "Stop");
+                        running = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine(ex.GetType().Name + ": " + ex.Message);
+                    }
+                }
+            }
+        };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            ActivationParams parameters = new ActivationParams {
+                ActivationType = 1, TargetProcessId = pid, ProcessLoopbackMode = 0
+            };
+            activationMemory = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(ActivationParams)));
+            Marshal.StructureToPtr(parameters, activationMemory, false);
+            PropVariant variant = new PropVariant {
+                Type = 65, BlobSize = (uint)Marshal.SizeOf(typeof(ActivationParams)), BlobData = activationMemory
+            };
+            Guid clientId = typeof(IAudioClient).GUID;
+            Check(ActivateAudioInterfaceAsync("VAD\\Process_Loopback", ref clientId, ref variant,
+                handler, out operation), "ActivateAudioInterfaceAsync");
+            if (!handler.Done.WaitOne(10000))
+            {
+                // Native callback may still own the activation parameters. Exit the short-lived
+                // helper instead of freeing memory beneath an in-flight callback.
+                Console.Error.WriteLine("Audio activation timed out after 10 seconds.");
+                Environment.Exit(3);
+            }
+            Check(handler.Error, "GetActivateResult");
+            audio = (IAudioClient)handler.Activated;
+            WaveFormat format = new WaveFormat {
+                Tag = 1, Channels = 2, SamplesPerSecond = 48000,
+                AverageBytesPerSecond = 192000, BlockAlign = 4, BitsPerSample = 16, ExtraSize = 0
+            };
+            Check(audio.Initialize(0, 0x00020000u | 0x00040000u | 0x80000000u,
+                0, 0, ref format, IntPtr.Zero), "IAudioClient.Initialize");
+            Check(audio.SetEventHandle(ready.SafeWaitHandle.DangerousGetHandle()), "SetEventHandle");
+            Guid captureId = typeof(IAudioCaptureClient).GUID;
+            object captureObject;
+            Check(audio.GetService(ref captureId, out captureObject), "GetService");
+            capture = (IAudioCaptureClient)captureObject;
+            // Obtain raw stdout only after Main has set Console.OutputEncoding. There is
+            // no file, background recorder, or separate native capture process in stream mode.
+            using (BinaryWriter writer = new BinaryWriter(streamMode ? Console.OpenStandardOutput() :
+                (Stream)new FileStream(output, FileMode.CreateNew, FileAccess.Write)))
+            {
+                if (streamMode) WriteStreamHeader(writer);
+                else WriteHeader(writer, 0);
+                try
+                {
+                    lock (captureGate)
+                    {
+                        if (!stopRequested)
+                        {
+                            Check(audio.Start(), "Start");
+                            running = true;
+                            clock.Start();
+                        }
+                    }
+                    double lastStreamPacketSeconds = 0;
+                    while (!stopRequested && (seconds == 0 || clock.Elapsed.TotalSeconds < seconds))
+                    {
+                        int waitMs = 100;
+                        if (seconds != 0)
+                            waitMs = Math.Min(waitMs, Math.Max(1,
+                                (int)Math.Ceiling(seconds * 1000 - clock.Elapsed.TotalMilliseconds)));
+                        if (streamMode)
+                            waitMs = Math.Min(waitMs, Math.Max(1, (int)Math.Ceiling(
+                                (lastStreamPacketSeconds + 0.250 - clock.Elapsed.TotalSeconds) * 1000)));
+                        ready.WaitOne(waitMs);
+                        while (!stopRequested && (seconds == 0 || clock.Elapsed.TotalSeconds < seconds))
+                        {
+                            uint frames, flags;
+                            double receivedSeconds;
+                            byte[] buffer;
+                            lock (captureGate)
+                            {
+                                if (stopRequested) break;
+                                uint available;
+                                Check(capture.GetNextPacketSize(out available), "GetNextPacketSize");
+                                if (available == 0) break;
+                                IntPtr pointer;
+                                ulong devicePosition, qpcPosition;
+                                Check(capture.GetBuffer(out pointer, out frames, out flags,
+                                    out devicePosition, out qpcPosition), "GetBuffer");
+                                try
+                                {
+                                    // Receipt time since Start, NOT song position or speaker time.
+                                    receivedSeconds = clock.Elapsed.TotalSeconds;
+                                    buffer = new byte[checked((int)frames * 4)];
+                                    // Only an explicit WASAPI SILENT packet represents zero PCM.
+                                    // Missing packets/data must never be synthesized as silence.
+                                    if ((flags & 2u) == 0 && buffer.Length != 0)
+                                    {
+                                        if (pointer == IntPtr.Zero)
+                                            throw new InvalidDataException("Non-silent WASAPI packet has no PCM data.");
+                                        Marshal.Copy(pointer, buffer, 0, buffer.Length);
+                                    }
+                                }
+                                finally { Check(capture.ReleaseBuffer(frames), "ReleaseBuffer"); }
+                            }
+                            // The native buffer is already released before any potentially
+                            // blocking pipe or WAV write (including the packet header).
+                            double nowMs = receivedSeconds * 1000;
+                            if (firstPacketMs < 0) firstPacketMs = nowMs;
+                            if (previousPacketMs >= 0) maxPacketGapMs = Math.Max(maxPacketGapMs, nowMs - previousPacketMs);
+                            previousPacketMs = nowMs;
+                            if (streamMode)
+                            {
+                                WriteStreamPacket(writer, frames, flags & 7u, receivedSeconds, buffer);
+                                lastStreamPacketSeconds = receivedSeconds;
+                            }
+                            else writer.Write(buffer);
+                            checked
+                            {
+                                dataBytes += (uint)buffer.Length;
+                                packetCount++;
+                                if ((flags & 1u) != 0) discontinuities++;
+                                if ((flags & 2u) != 0) silentPackets++;
+                                if ((flags & 4u) != 0) timestampErrors++;
+                            }
+                        }
+                        double elapsed = clock.Elapsed.TotalSeconds;
+                        if (streamMode && !stopRequested && (seconds == 0 || elapsed < seconds) &&
+                            elapsed - lastStreamPacketSeconds >= 0.250)
+                        {
+                            WriteStreamPacket(writer, 0, 0, elapsed, null);
+                            lastStreamPacketSeconds = elapsed;
+                        }
+                    }
+                }
+                finally
+                {
+                    lock (captureGate)
+                    {
+                        if (running) { audio.Stop(); running = false; }
+                        clock.Stop();
+                    }
+                    if (!streamMode) WriteHeader(writer, checked((uint)dataBytes));
+                }
+                // Exceptions (including a disconnected reader) stop capture via finally,
+                // but must not produce a misleading normal-end packet.
+                if (streamMode) WriteStreamPacket(writer, 0, 0x80000000u, clock.Elapsed.TotalSeconds, null);
+            }
+            TextWriter statistics = streamMode ? Console.Error : Console.Out;
+            statistics.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "{{\"target_pid\":{0},\"capture_scope\":\"process_tree_include\",\"wall_seconds\":{1:F4},\"audio_seconds\":{2:F4},\"packets\":{3},\"silent_packets\":{4},\"discontinuities\":{5},\"timestamp_errors\":{6},\"first_packet_ms\":{7:F3},\"max_packet_gap_ms\":{8:F3}",
+                pid, clock.Elapsed.TotalSeconds, dataBytes / 192000.0, packetCount,
+                silentPackets, discontinuities, timestampErrors, firstPacketMs, maxPacketGapMs) + "}");
+            return 0;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+            lock (captureGate)
+            {
+                if (running && audio != null) { audio.Stop(); running = false; }
+            }
+            if (capture != null) Marshal.ReleaseComObject(capture);
+            if (audio != null) Marshal.ReleaseComObject(audio);
+            if (operation != null) Marshal.ReleaseComObject(operation);
+            if (activationMemory != IntPtr.Zero) Marshal.FreeHGlobal(activationMemory);
+            ready.Dispose();
+            handler.Done.Dispose();
+            GC.KeepAlive(handler);
+        }
+    }
+}
+END FILE: ProcessLoopback.cs
+
+========================================================================
+BEGIN FILE: README_NEXT_STEP.txt
+BYTES: 1429
+SHA256: 926bd34259cff6eec1187da86257c1cb0705b13a34c38d5593ac9123a5763a2e
+========================================================================
+本次迭代：GSMTC 歌曲上下文读取器（第一版）
+
+先运行现有检测器 + 新模块的模拟单元测试：
+  .venv\Scripts\python.exe -m unittest -v test_audio_changes test_music_context
+
+在 Windows 上先安装可选 GSMTC 依赖（不会改动原 requirements.txt）：
+  .venv\Scripts\python.exe -m pip install -r requirements-gsmtc.txt
+
+然后启动网易云音乐并播放一首歌，再运行：
+  .venv\Scripts\python.exe check_music_context.py
+
+当前状态：
+- 原 cloudmusic 进程树 WASAPI 音频捕获与 ChangeEvent 检测器未修改。
+- 新增 music_context.py，惰性导入 Windows.Media.Control GSMTC。
+- 默认严格过滤 source_app_user_model_id 不包含 cloudmusic 的会话。
+- 读取歌曲名、歌手、专辑、播放状态及 GSMTC timeline（如果存在）。
+- 如果系统不提供 position，则返回 null；绝不把采集会话时长伪装成歌曲进度。
+- 新模块尚未接入 monitor_audio.py，避免未经实机验证就改变现有实时链路。
+
+本次在当前执行环境运行了 43 项自动化测试（37 项原测试 + 6 项新测试），全部通过。
+这些新测试使用模拟 GSMTC 对象，不代表真实 Windows / 网易云客户端兼容性已经验证。
+下一步请把 check_music_context.py 的实际 JSON 输出反馈给我，重点看 source_app_id、
+title、playback_status 和 position_seconds 是否存在、是否随播放变化。
+END FILE: README_NEXT_STEP.txt
+
+========================================================================
+BEGIN FILE: audio_changes.py
+BYTES: 13776
+SHA256: 6603ed50cb5bc1c36148505c384e24978f4948da6d21fe6ae9fef744414a6c7c
+========================================================================
+"""Incremental, local-only PCM16 music-change heuristics.
+
+Events describe acoustic evidence, NOT chorus boundaries, emotion, song position,
+or actual player pause actions. Times are relative to the capture/replay session.
+`event_time_s` is when a condition first passed its threshold; `detected_at_s`
+includes the confirmation window. Neither is a measured end-to-end audio latency.
+
+Usage:
+    detector = AudioChangeDetector(sample_rate=48000, channels=2)
+    for event in detector.feed_pcm16(pcm_bytes):
+        consume(event.to_dict())
+
+Call reset() when capture packets are lost. Never replace missing packets with
+zeroes: a capture failure must not be interpreted as musical silence.
+"""
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import asdict, dataclass, field
+import math
+from typing import Any
+
+import numpy as np
+
+
+@dataclass(frozen=True)
+class DetectorConfig:
+    hop_seconds: float = 0.05
+    silence_dbfs: float = -60.0
+    resume_dbfs: float = -52.0
+    silence_hold_seconds: float = 0.7
+    resume_hold_seconds: float = 0.25
+    history_seconds: float = 8.0
+    baseline_seconds: float = 4.0
+    baseline_guard_seconds: float = 1.0
+    minimum_baseline_seconds: float = 2.0
+    recent_seconds: float = 0.4
+    energy_rise_db: float = 6.0
+    energy_drop_db: float = 8.0
+    change_hold_seconds: float = 0.5
+    texture_distance: float = 0.38
+    texture_hold_seconds: float = 0.6
+    rhythm_window_seconds: float = 1.5
+    rhythm_ratio: float = 1.8
+    rhythm_delta_per_second: float = 1.0
+    rhythm_hold_seconds: float = 0.5
+    event_cooldown_seconds: float = 8.0
+    global_change_cooldown_seconds: float = 1.5
+
+    def __post_init__(self) -> None:
+        for name, value in asdict(self).items():
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+        positive = [name for name in asdict(self) if name not in ("silence_dbfs", "resume_dbfs")]
+        if any(getattr(self, name) <= 0 for name in positive):
+            raise ValueError("Durations and detection thresholds must be positive")
+        if not 0.01 <= self.hop_seconds <= 0.1:
+            raise ValueError("hop_seconds must be between 0.01 and 0.1")
+        if not self.silence_dbfs < self.resume_dbfs < 0:
+            raise ValueError("Require silence_dbfs < resume_dbfs < 0")
+        if self.history_seconds < self.baseline_seconds + self.baseline_guard_seconds:
+            raise ValueError("History must contain the baseline and guard window")
+        if self.minimum_baseline_seconds > self.baseline_seconds:
+            raise ValueError("Minimum baseline cannot exceed the baseline window")
+        if not 0 < self.texture_distance < 1:
+            raise ValueError("texture_distance must be between 0 and 1")
+
+
+@dataclass(frozen=True)
+class ChangeEvent:
+    type: str
+    event_time_s: float
+    detected_at_s: float
+    stream_epoch: int
+    evidence: dict[str, Any] = field(default_factory=dict)
+    time_basis: str = "capture_session_seconds"
+
+    def to_dict(self) -> dict[str, Any]:
+        value = asdict(self)
+        value["event_time_s"] = round(self.event_time_s, 4)
+        value["detected_at_s"] = round(self.detected_at_s, 4)
+        value["confirmation_seconds"] = round(max(0.0, self.detected_at_s - self.event_time_s), 4)
+        return value
+
+
+@dataclass
+class _Feature:
+    end: float
+    db: float
+    bands: np.ndarray
+    onset: bool
+
+
+class AudioChangeDetector:
+    """Stateful bounded-history detector; keep one instance per capture stream."""
+
+    def __init__(self, sample_rate: int = 48000, channels: int = 2,
+                 config: DetectorConfig | None = None, *, start_seconds: float = 0.0) -> None:
+        if not 8000 <= sample_rate <= 192000 or not 1 <= channels <= 8:
+            raise ValueError("Unsupported sample rate or channel count")
+        if not math.isfinite(start_seconds) or start_seconds < 0:
+            raise ValueError("start_seconds must be finite and nonnegative")
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.config = config or DetectorConfig()
+        self.hop_frames = round(sample_rate * self.config.hop_seconds)
+        self.hop_seconds = self.hop_frames / sample_rate
+        self._window = np.hanning(self.hop_frames).astype(np.float32)[:, None]
+        self._fft_size = 1 << (self.hop_frames - 1).bit_length()
+        frequencies = np.fft.rfftfreq(self._fft_size, 1 / sample_rate)
+        edges = [0, 80, 200, 500, 1000, 2500, 6000, 12000, sample_rate / 2 + 1]
+        edges = sorted(set(x for x in edges if x <= sample_rate / 2 + 1))
+        self._band_masks = [(frequencies >= a) & (frequencies < b) for a, b in zip(edges, edges[1:])]
+        self._history: deque[_Feature] = deque(maxlen=math.ceil(self.config.history_seconds / self.hop_seconds) + 2)
+        self._pending: dict[str, float] = {}
+        self._last_event: dict[str, float] = {}
+        self._last_change = -math.inf
+        self._origin = start_seconds
+        self._frames = 0
+        self._buffer = np.empty((0, channels), dtype=np.float32)
+        self._previous_db: float | None = None
+        self._previous_bands: np.ndarray | None = None
+        self._last_onset = -math.inf
+        self.stream_epoch = 0
+        self.state = "initializing"
+        self.last_features: dict[str, Any] = {}
+        self.feature_frames = 0
+
+    @property
+    def time_seconds(self) -> float:
+        return self._origin + self._frames / self.sample_rate
+
+    def reset(self, at_seconds: float, reason: str = "capture_discontinuity") -> ChangeEvent:
+        if not math.isfinite(at_seconds) or at_seconds < self.time_seconds - 1e-6:
+            raise ValueError("Reset time must be finite and cannot move backwards")
+        self.stream_epoch += 1
+        self._origin = at_seconds
+        self._frames = 0
+        self._buffer = np.empty((0, self.channels), dtype=np.float32)
+        self._history.clear()
+        self._pending.clear()
+        self._last_event.clear()
+        self._last_change = -math.inf
+        self._previous_db = None
+        self._previous_bands = None
+        self._last_onset = -math.inf
+        self.state = "initializing"
+        self.last_features = {}
+        return ChangeEvent("capture_gap", at_seconds, at_seconds, self.stream_epoch, {"reason": reason})
+
+    def feed_pcm16(self, pcm: bytes) -> list[ChangeEvent]:
+        if len(pcm) % (2 * self.channels):
+            raise ValueError("PCM chunk must contain complete interleaved frames")
+        if not pcm:
+            return []
+        samples = np.frombuffer(pcm, dtype="<i2").reshape(-1, self.channels).astype(np.float32) / 32768.0
+        return self.feed(samples)
+
+    def feed(self, samples: np.ndarray) -> list[ChangeEvent]:
+        samples = np.asarray(samples, dtype=np.float32)
+        if samples.ndim == 1 and self.channels == 1:
+            samples = samples[:, None]
+        if samples.ndim != 2 or samples.shape[1] != self.channels:
+            raise ValueError("Expected an array with shape (frames, channels)")
+        if not np.isfinite(samples).all() or (samples.size and np.max(np.abs(samples)) > 1.0001):
+            raise ValueError("Samples must be finite normalized values in [-1, 1]")
+        self._buffer = np.concatenate((self._buffer, samples), axis=0)
+        events: list[ChangeEvent] = []
+        consumed = 0
+        while consumed + self.hop_frames <= len(self._buffer):
+            block = self._buffer[consumed:consumed + self.hop_frames]
+            self._frames += self.hop_frames
+            feature = self._extract(block, self.time_seconds)
+            events.extend(self._advance(feature))
+            self.feature_frames += 1
+            consumed += self.hop_frames
+        self._buffer = self._buffer[consumed:].copy()
+        return events
+
+    def _extract(self, block: np.ndarray, end: float) -> _Feature:
+        # Average CHANNEL POWERS, not channels themselves; antiphase stereo must
+        # not disappear through a naive mono downmix.
+        rms = float(np.sqrt(np.mean(block.astype(np.float64) ** 2)))
+        db = max(-120.0, 20 * math.log10(max(rms, 1e-6)))
+        fft = np.fft.rfft(block * self._window, n=self._fft_size, axis=0)
+        power = np.mean(np.abs(fft) ** 2, axis=1)
+        bands = np.array([float(power[mask].sum()) for mask in self._band_masks])
+        bands /= max(float(bands.sum()), 1e-20)
+        db_jump = db - self._previous_db if self._previous_db is not None else 0.0
+        flux = float(np.maximum(bands - self._previous_bands, 0).sum()) if self._previous_bands is not None else 0.0
+        onset = (db > self.config.resume_dbfs and end - self._last_onset >= 0.12
+                 and (db_jump >= 4.0 or (flux >= 0.2 and db_jump >= 1.5)))
+        if onset:
+            self._last_onset = end
+        self._previous_db, self._previous_bands = db, bands
+        return _Feature(end, db, bands, onset)
+
+    def _confirmed(self, name: str, condition: bool, end: float, hold: float) -> float | None:
+        if not condition:
+            self._pending.pop(name, None)
+            return None
+        since = self._pending.setdefault(name, end - self.hop_seconds)
+        return since if end - since >= hold - 1e-8 else None
+
+    def _emit(self, name: str, since: float, end: float, evidence: dict[str, Any]) -> ChangeEvent:
+        self._pending.pop(name, None)
+        self._last_event[name] = end
+        return ChangeEvent(name, max(0.0, since), end, self.stream_epoch, evidence)
+
+    def _advance(self, current: _Feature) -> list[ChangeEvent]:
+        c, now = self.config, current.end
+        self.last_features = {"rms_dbfs": round(current.db, 2), "onset": current.onset}
+        quiet_since = self._confirmed("quiet", current.db < c.silence_dbfs, now, c.silence_hold_seconds)
+        audible_since = self._confirmed("audible", current.db > c.resume_dbfs, now, c.resume_hold_seconds)
+        if self.state != "silence" and quiet_since is not None:
+            self.state = "silence"
+            self._history.clear()
+            self._pending.clear()
+            return [self._emit("silence_start", quiet_since, now, {"rms_dbfs": round(current.db, 2), "interpretation": "silence_or_pause_candidate"})]
+        if self.state != "audio" and audible_since is not None:
+            previous = self.state
+            self.state = "audio"
+            self._history.clear()
+            self._pending.clear()
+            self._history.append(current)
+            return [self._emit("audio_resumed" if previous == "silence" else "audio_started", audible_since, now,
+                               {"rms_dbfs": round(current.db, 2)})]
+        if self.state != "audio" or current.db < c.silence_dbfs:
+            for key in ("energy_rise", "energy_drop", "texture_change", "rhythm_change"):
+                self._pending.pop(key, None)
+            return []
+        self._history.append(current)
+        history = list(self._history)
+        baseline = [f for f in history if now - c.baseline_guard_seconds - c.baseline_seconds < f.end <= now - c.baseline_guard_seconds + 1e-8]
+        recent = [f for f in history if f.end > now - c.recent_seconds + 1e-8]
+        if len(baseline) * self.hop_seconds < c.minimum_baseline_seconds - 1e-8 or not recent:
+            return []
+        base_db = float(np.median([f.db for f in baseline]))
+        recent_db = float(np.median([f.db for f in recent]))
+        delta_db = recent_db - base_db
+        base_bands = np.median(np.stack([f.bands for f in baseline]), axis=0)
+        new_bands = np.median(np.stack([f.bands for f in recent]), axis=0)
+        base_bands /= max(float(base_bands.sum()), 1e-20)
+        new_bands /= max(float(new_bands.sum()), 1e-20)
+        distance = float(np.abs(new_bands - base_bands).sum() / 2)
+        rhythm_recent = [f for f in history if f.end > now - c.rhythm_window_seconds + 1e-8]
+        rhythm_base = [f for f in history if now - c.rhythm_window_seconds - c.baseline_seconds < f.end <= now - c.rhythm_window_seconds + 1e-8]
+        rhythm_ready = len(rhythm_base) * self.hop_seconds >= c.minimum_baseline_seconds - 1e-8
+        onset_rate = sum(f.onset for f in rhythm_recent) / max(self.hop_seconds, len(rhythm_recent) * self.hop_seconds)
+        base_rate = sum(f.onset for f in rhythm_base) / max(self.hop_seconds, len(rhythm_base) * self.hop_seconds)
+        ratio = (onset_rate + 0.25) / (base_rate + 0.25)
+        rhythm_change = rhythm_ready and abs(onset_rate - base_rate) >= c.rhythm_delta_per_second and (ratio >= c.rhythm_ratio or ratio <= 1 / c.rhythm_ratio)
+        evidence = {
+            "rms_dbfs": round(recent_db, 2), "baseline_rms_dbfs": round(base_db, 2),
+            "delta_db": round(delta_db, 2), "spectral_distance": round(distance, 4),
+            "onsets_per_second": round(onset_rate, 3), "baseline_onsets_per_second": round(base_rate, 3),
+        }
+        self.last_features.update(evidence)
+        candidates = [
+            ("energy_rise", delta_db >= c.energy_rise_db, c.change_hold_seconds),
+            ("energy_drop", delta_db <= -c.energy_drop_db, c.change_hold_seconds),
+            ("texture_change", distance >= c.texture_distance, c.texture_hold_seconds),
+            ("rhythm_change", rhythm_change, c.rhythm_hold_seconds),
+        ]
+        ready = []
+        for name, condition, hold in candidates:
+            since = self._confirmed(name, condition, now, hold)
+            if since is not None and now - self._last_event.get(name, -math.inf) >= c.event_cooldown_seconds:
+                ready.append((name, since))
+        if ready and now - self._last_change >= c.global_change_cooldown_seconds:
+            name, since = ready[0]
+            self._last_change = now
+            return [self._emit(name, since, now, evidence)]
+        return []
+END FILE: audio_changes.py
+
+========================================================================
+BEGIN FILE: check_music_context.py
+BYTES: 758
+SHA256: 5bcc351953c672f26818d9bacf8e93c90b61acc80dba6c2640e2ed5422958512
+========================================================================
+"""One-shot GSMTC diagnostic. Run on Windows while NetEase Cloud Music is open."""
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+
+from music_context import GSMTCUnavailableError, MusicContextReader
+
+
+async def main() -> int:
+    try:
+        reader = await MusicContextReader.create()
+    except GSMTCUnavailableError as exc:
+        print(json.dumps({"available": False, "error": str(exc)}, ensure_ascii=False, indent=2))
+        return 2
+    context = await reader.read()
+    print(json.dumps(context.to_dict(), ensure_ascii=False, indent=2))
+    return 0 if context.available else 1
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(asyncio.run(main()))
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+END FILE: check_music_context.py
+
+========================================================================
+BEGIN FILE: evidence/iteration_001_tests.json
+BYTES: 587
+SHA256: 5f8004284a7735db19cb8d5655b477d436703a05e2d2631c7befe5adbc298e9f
+========================================================================
+{
+  "iteration": 1,
+  "command": "python -m unittest -q test_audio_changes test_music_context",
+  "tests_passed": 43,
+  "failures": 0,
+  "errors": 0,
+  "environment": "assistant execution container, not target Windows desktop",
+  "mocked_gsmtc_tests": 6,
+  "real_windows_gsmtc_verified": false,
+  "netease_client_session_verified": false,
+  "notes": [
+    "Original audio detector and its 37 tests were retained.",
+    "GSMTC reader tests use injected fake session objects.",
+    "Real source_app_user_model_id and timeline behavior must be checked on the user's Windows machine."
+  ]
+}
+END FILE: evidence/iteration_001_tests.json
+
+========================================================================
+BEGIN FILE: evidence/iteration_001_tests.txt
+BYTES: 385
+SHA256: 915b5ab1a42e41bd8936a4301030827f083c1032cf0160ff311d519d6ebee7f3
+========================================================================
+Command: python -m unittest -q test_audio_changes test_music_context
+Result: 43 tests passed, 0 failures/errors.
+Environment: current assistant execution container; not the target Windows desktop.
+Coverage: original 37 regression tests plus 6 mocked GSMTC reader tests.
+Not verified: real Windows GSMTC API import/runtime, NetEase session app-id, actual title/status/timeline updates.
+END FILE: evidence/iteration_001_tests.txt
+
+========================================================================
+BEGIN FILE: evidence/verification_results.json
+BYTES: 4809
+SHA256: 60faac5d61802209332d7306fb5222db9ccae640a99447e222eefb5b135e4f11
+========================================================================
+{
+  "synthetic_transition_detection_seconds": {
+    "silence_start": 0.7,
+    "audio_resumed": 0.25,
+    "energy_rise": 0.65,
+    "texture_change": 0.75,
+    "rhythm_change": 1.05
+  },
+  "synthetic_note": "Known constructed transitions; not a guarantee for real music or end-to-end voice latency.",
+  "real_runs": {
+    "live_validation": {
+      "logged_at_utc": "2026-11-07T07:24:50.497774+00:00",
+      "kind": "summary",
+      "mode": "live",
+      "interrupted": false,
+      "wall_seconds": 15.0998,
+      "audio_seconds": 14.98,
+      "first_packet_received_seconds": 0.024007999999999998,
+      "queue_dropped_packets": 0,
+      "stale_packets_discarded": 0,
+      "max_packet_processing_ms": 18.754,
+      "feature_frames": 299,
+      "events": {
+        "audio_started": 1,
+        "texture_change": 1
+      },
+      "native_capture": {
+        "target_pid": 17232,
+        "capture_scope": "process_tree_include",
+        "wall_seconds": 15.0028,
+        "audio_seconds": 14.98,
+        "packets": 1498,
+        "silent_packets": 0,
+        "discontinuities": 0,
+        "timestamp_errors": 0,
+        "first_packet_ms": 24.008,
+        "max_packet_gap_ms": 11.47
+      },
+      "latency_note": "Processing time is not microphone/speaker-to-AI end-to-end latency."
+    },
+    "replay_validation": {
+      "logged_at_utc": "2026-11-07T07:24:52.272207+00:00",
+      "kind": "summary",
+      "mode": "wav_replay",
+      "audio_seconds": 9.98,
+      "analysis_seconds": 0.0572,
+      "max_block_processing_ms": 5.287,
+      "feature_frames": 199,
+      "events": {
+        "audio_started": 1,
+        "rhythm_change": 1
+      }
+    },
+    "silence_validation": {
+      "logged_at_utc": "2026-11-07T07:24:52.457053+00:00",
+      "kind": "summary",
+      "mode": "wav_replay",
+      "audio_seconds": 9.99,
+      "analysis_seconds": 0.0309,
+      "max_block_processing_ms": 0.57,
+      "feature_frames": 199,
+      "events": {
+        "silence_start": 1
+      }
+    }
+  },
+  "automated_tests": {
+    "command": ".venv/Scripts/python.exe -m unittest -v test_audio_changes",
+    "passed": 37,
+    "failures": 0,
+    "errors": 0,
+    "run_seconds": 0.747,
+    "review_regressions": [
+      "Sequence gaps are detected at the consumed packet boundary, not from future producer drops",
+      "Missing initial packets reset at the first consumed packet",
+      "Popen failure preserves the original exception",
+      "Popen interruption does not dereference a missing child",
+      "Failure starting either reader thread terminates the child and closes pipes",
+      "Interruptions before or after either thread starts clean up the child"
+    ]
+  },
+  "repeated_regressions": {
+    "cases_per_iteration": 3,
+    "iterations": 10,
+    "passed": 30,
+    "failures": 0,
+    "errors": 0,
+    "run_seconds": 0.167,
+    "note": "Queue boundary and thread-start interruption cases repeated; not hour-scale stability testing."
+  },
+  "native_safety_checks": {
+    "existing_wav_not_overwritten": true,
+    "closed_output_pipe_stops_capture": true
+  },
+  "additional_checks": {
+    "stationary_noise_no_change_events": true,
+    "json_stdout_matches_log": true,
+    "existing_event_log_not_overwritten": true
+  },
+  "pre_review_live_smoke": {
+    "log": "live_final_smoke.jsonl",
+    "audio_seconds": 4.98,
+    "queue_dropped_packets": 0,
+    "discontinuities": 0,
+    "max_packet_processing_ms": 6.041,
+    "first_packet_clock_anchor_enabled": true
+  },
+  "final_live_smoke": {
+    "log": "live_review_fixed.jsonl",
+    "logged_at_utc": "2026-11-07T07:43:43.222689+00:00",
+    "wall_seconds": 5.0953,
+    "audio_seconds": 4.75,
+    "first_packet_received_seconds": 0.2538024,
+    "queue_dropped_packets": 0,
+    "stale_packets_discarded": 0,
+    "discontinuities": 0,
+    "max_packet_processing_ms": 2.131,
+    "events": {"silence_start": 1},
+    "observed_rms_dbfs": -96.71,
+    "first_packet_clock_anchor_enabled": true,
+    "no_capture_helper_remained_after_exit": true,
+    "note": "Near-silent input in this run; no assertion about the player's actual pause state. Processing time is not end-to-end AI voice latency."
+  },
+  "final_replay": {
+    "log": "replay_review_fixed.jsonl",
+    "logged_at_utc": "2026-11-07T07:45:18.961661+00:00",
+    "audio_seconds": 9.98,
+    "analysis_seconds": 0.061,
+    "max_block_processing_ms": 5.373,
+    "feature_frames": 199,
+    "events": {"audio_started": 1, "rhythm_change": 1},
+    "json_stdout_matches_log": true,
+    "note": "Replay of the user's previously confirmed recording; no new raw audio recorded. Change candidates are not ground-truth musical annotations."
+  },
+  "not_verified": [
+    "Automatic chorus recognition",
+    "Other-app sound isolation by controlled contrast",
+    "Manual live pause/resume sequence",
+    "Long-running hour-scale stability"
+  ]
+}
+END FILE: evidence/verification_results.json
+
+========================================================================
+BEGIN FILE: monitor_audio.py
+BYTES: 17611
+SHA256: 40d2a4c109ca43b75b2728efcdb5eb457de2c98aa7b8d2dd57514f4b46dcbb0e
+========================================================================
+"""Local real-time changes from NetEase process audio or a PCM16 WAV.
+
+Run with .venv/Scripts/python.exe monitor_audio.py --seconds 60
+Replay: .venv/Scripts/python.exe monitor_audio.py --wav recording.wav
+Continuous (until Ctrl+C): --seconds 0. Use --json for JSONL stdout.
+Default logs contain features/events, not raw audio. No network/API calls.
+"""
+from __future__ import annotations
+
+import argparse
+from collections import Counter, deque
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
+import math
+from pathlib import Path
+import queue
+import struct
+import subprocess
+import sys
+import threading
+import time
+from typing import BinaryIO
+import wave
+
+from audio_changes import AudioChangeDetector, ChangeEvent, DetectorConfig
+from test_netease_audio import BASE, ensure_helper, find_cloudmusic_pid
+
+STREAM_HEADER = struct.Struct("<4sIII")
+PACKET_HEADER = struct.Struct("<IId")
+END_FLAG = 0x80000000
+LABELS = {
+    "audio_started": "检测到声音", "silence_start": "持续安静（可能暂停）",
+    "audio_resumed": "声音恢复", "energy_rise": "能量明显上升",
+    "energy_drop": "能量明显下降", "texture_change": "音色/编配变化候选",
+    "rhythm_change": "节奏密度变化候选", "capture_gap": "采集间断，已重置基线",
+    "capture_stalled": "暂未收到音频，不能判断是暂停还是采集异常",
+    "capture_recovered": "音频数据恢复",
+}
+
+
+@dataclass
+class Packet:
+    frames: int
+    flags: int
+    received_seconds: float
+    pcm: bytes
+    queued_at: float = 0.0
+    sequence: int = 0
+
+
+def sequence_gap(previous: int | None, current: int) -> bool:
+    """Consumer ordering, not a producer's future cumulative drop count."""
+    return current != (0 if previous is None else previous + 1)
+
+
+def read_exact(stream: BinaryIO, size: int) -> bytes:
+    data = bytearray()
+    while len(data) < size:
+        piece = stream.read(size - len(data))
+        if not piece:
+            raise EOFError(f"Audio stream truncated: expected {size}, received {len(data)} bytes")
+        data.extend(piece)
+    return bytes(data)
+
+
+def read_header(stream: BinaryIO) -> tuple[int, int]:
+    magic, rate, channels, bits = STREAM_HEADER.unpack(read_exact(stream, STREAM_HEADER.size))
+    if magic != b"NCM1" or rate != 48000 or channels != 2 or bits != 16:
+        raise ValueError("Unsupported capture protocol or audio format")
+    return rate, channels
+
+
+def read_packet(stream: BinaryIO, rate: int, channels: int) -> Packet:
+    frames, flags, received = PACKET_HEADER.unpack(read_exact(stream, PACKET_HEADER.size))
+    if frames > rate or not math.isfinite(received) or received < 0:
+        raise ValueError("Invalid capture packet length/timestamp")
+    if flags & END_FLAG and frames:
+        raise ValueError("End packet must not contain PCM")
+    pcm = read_exact(stream, frames * channels * 2) if frames else b""
+    return Packet(frames, flags, received, pcm, time.perf_counter())
+
+
+class Reporter:
+    def __init__(self, path: Path, json_stdout: bool) -> None:
+        self.path = path
+        self.file = path.open("x", encoding="utf-8")
+        self.json_stdout = json_stdout
+        self.counts: Counter[str] = Counter()
+
+    def write(self, record: dict) -> None:
+        record = {"logged_at_utc": datetime.now(timezone.utc).isoformat(), **record}
+        text = json.dumps(record, ensure_ascii=False, allow_nan=False)
+        self.file.write(text + "\n")
+        self.file.flush()
+        if self.json_stdout:
+            print(text, flush=True)
+        elif record["kind"] == "event":
+            print(f"[{record['detected_at_s']:7.2f}s] {LABELS.get(record['type'], record['type'])} | {record['evidence']}", flush=True)
+        elif record["kind"] == "status":
+            print(f"[{record['capture_seconds']:7.2f}s] 状态={record['state']}  RMS={record['features'].get('rms_dbfs', '--')} dBFS", flush=True)
+        elif record["kind"] == "summary":
+            print("检测结束：" + json.dumps(record, ensure_ascii=False), flush=True)
+
+    def event(self, event: ChangeEvent) -> None:
+        self.counts[event.type] += 1
+        self.write({"kind": "event", **event.to_dict()})
+
+    def close(self) -> None:
+        self.file.close()
+
+
+def replay(path: Path, config: DetectorConfig, reporter: Reporter) -> dict:
+    begin = time.perf_counter()
+    frames_read = 0
+    maximum_block_ms = 0.0
+    with wave.open(str(path), "rb") as wav:
+        if wav.getsampwidth() != 2 or wav.getcomptype() != "NONE":
+            raise ValueError("回放只支持未压缩 PCM16 WAV")
+        rate, channels = wav.getframerate(), wav.getnchannels()
+        detector = AudioChangeDetector(rate, channels, config)
+        reporter.write({"kind": "session", "mode": "wav_replay", "input": str(path.resolve()),
+                        "sample_rate": rate, "channels": channels, "config": config.__dict__,
+                        "time_basis": "capture_session_seconds", "audio_saved": False})
+        while True:
+            pcm = wav.readframes(4096)
+            if not pcm:
+                break
+            frames_read += len(pcm) // (2 * channels)
+            started = time.perf_counter()
+            events = detector.feed_pcm16(pcm)
+            maximum_block_ms = max(maximum_block_ms, (time.perf_counter() - started) * 1000)
+            for event in events:
+                reporter.event(event)
+        if frames_read != wav.getnframes():
+            raise ValueError("WAV 文件不完整：数据帧数与文件头不符")
+    return {"mode": "wav_replay", "audio_seconds": round(frames_read / rate, 4),
+            "analysis_seconds": round(time.perf_counter() - begin, 4),
+            "max_block_processing_ms": round(maximum_block_ms, 3),
+            "feature_frames": detector.feature_frames, "events": dict(reporter.counts)}
+
+
+def live(seconds: float, pid: int | None, config: DetectorConfig, reporter: Reporter, meter_interval: float) -> dict:
+    if sys.platform != "win32":
+        raise RuntimeError("实时进程捕获需要 Windows")
+    pid = pid if pid is not None else find_cloudmusic_pid()
+    helper = ensure_helper()
+    process: subprocess.Popen | None = None
+    packets: queue.Queue[Packet] = queue.Queue(maxsize=64)
+    state: dict = {"format": None, "error": None, "done": False, "dropped": 0, "end_seen": False}
+    stderr_lines: deque[str] = deque(maxlen=20)
+    format_ready = threading.Event()
+    stop = threading.Event()
+
+    def reader() -> None:
+        try:
+            rate, channels = read_header(process.stdout)
+            state["format"] = (rate, channels)
+            format_ready.set()
+            previous_time = -1.0
+            next_sequence = 0
+            while not stop.is_set():
+                packet = read_packet(process.stdout, rate, channels)
+                if packet.received_seconds < previous_time:
+                    raise ValueError("Capture timestamp moved backwards")
+                previous_time = packet.received_seconds
+                if packet.flags & END_FLAG:
+                    state["end_seen"] = True
+                    break
+                if not packet.frames:
+                    continue  # Heartbeat is not silence and not audio.
+                packet.sequence = next_sequence
+                next_sequence += 1
+                try:
+                    packets.put_nowait(packet)
+                except queue.Full:
+                    try:
+                        packets.get_nowait()
+                        state["dropped"] += 1
+                    except queue.Empty:
+                        pass
+                    packets.put_nowait(packet)
+        except Exception as exc:
+            if not stop.is_set():
+                state["error"] = exc
+        finally:
+            format_ready.set()
+            state["done"] = True
+
+    def drain_stderr() -> None:
+        for line in iter(process.stderr.readline, b""):
+            stderr_lines.append(line.decode("utf-8-sig", errors="replace").strip())
+
+    read_thread = threading.Thread(target=reader, daemon=True, name="netease-pcm-reader")
+    error_thread = threading.Thread(target=drain_stderr, daemon=True, name="netease-diagnostics")
+    detector: AudioChangeDetector | None = None
+    start = time.perf_counter()
+    last_audio_at = start
+    last_meter = start
+    first_received: float | None = None
+    prior_packet_end: float | None = None
+    prior_sequence: int | None = None
+    stale_packets = 0
+    stale_since_reset = False
+    stalled = False
+    interrupted = False
+    audio_frames = 0
+    maximum_processing_ms = 0.0
+    try:
+        process = subprocess.Popen([str(helper), "--stream", str(pid), str(seconds)],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        assert process.stdout is not None and process.stderr is not None
+        read_thread.start()
+        error_thread.start()
+        if not format_ready.wait(12):
+            raise TimeoutError("音频捕获初始化超时")
+        if state["error"]:
+            raise RuntimeError(str(state["error"]) + "; " + " | ".join(stderr_lines))
+        if state["format"] is None:
+            raise RuntimeError("捕获器未提供音频格式")
+        rate, channels = state["format"]
+        detector = AudioChangeDetector(rate, channels, config)
+        start = last_audio_at = last_meter = time.perf_counter()
+        reporter.write({"kind": "session", "mode": "live", "target_pid": pid,
+                        "capture_scope": "process_tree_include", "sample_rate": rate,
+                        "channels": channels, "audio_saved": False,
+                        "time_basis": "capture_session_seconds", "config": config.__dict__})
+        while not state["done"] or not packets.empty():
+            now = time.perf_counter()
+            if seconds and now - start > seconds + 15:
+                raise TimeoutError("捕获器超过预期时限")
+            try:
+                packet = packets.get(timeout=0.1)
+            except queue.Empty:
+                if not stalled and now - last_audio_at >= 1.0:
+                    stalled = True
+                    at = max(detector.time_seconds, now - start)
+                    reporter.event(ChangeEvent("capture_stalled", at, at, detector.stream_epoch,
+                                               {"reason": "no_pcm_for_1s_not_assumed_silence"}))
+                continue
+            now = time.perf_counter()
+            if now - packet.queued_at > 0.5:
+                stale_packets += 1
+                stale_since_reset = True
+                continue
+            reasons = []
+            if stale_since_reset:
+                reasons.append("stale_packets_discarded")
+                stale_since_reset = False
+            if sequence_gap(prior_sequence, packet.sequence):
+                reasons.append("packet_sequence_gap")
+            if packet.flags & 1:
+                reasons.append("wasapi_discontinuity")
+            if packet.flags & 4:
+                reasons.append("wasapi_timestamp_error")
+            if prior_packet_end is not None and packet.received_seconds - prior_packet_end > packet.frames / rate + 0.2:
+                reasons.append("packet_timing_gap")
+            if stalled:
+                reasons.append("capture_recovered")
+            if first_received is None:
+                first_received = packet.received_seconds
+                if not reasons:
+                    # Anchor the first PCM frame to native receipt time minus its
+                    # duration. This is an approximate capture clock, not song time.
+                    detector = AudioChangeDetector(rate, channels, config,
+                        start_seconds=max(0.0, packet.received_seconds - packet.frames / rate))
+            if reasons:
+                at = max(detector.time_seconds, packet.received_seconds - packet.frames / rate)
+                reporter.event(detector.reset(at, ";".join(reasons)))
+                if stalled:
+                    reporter.event(ChangeEvent("capture_recovered", at, at, detector.stream_epoch))
+            stalled = False
+            last_audio_at = now
+            prior_packet_end = packet.received_seconds
+            prior_sequence = packet.sequence
+            before = time.perf_counter()
+            for event in detector.feed_pcm16(packet.pcm):
+                reporter.event(event)
+            maximum_processing_ms = max(maximum_processing_ms, (time.perf_counter() - before) * 1000)
+            audio_frames += packet.frames
+            if meter_interval > 0 and now - last_meter >= meter_interval:
+                reporter.write({"kind": "status", "capture_seconds": round(detector.time_seconds, 4),
+                                "state": detector.state, "features": detector.last_features})
+                last_meter = now
+        read_thread.join(timeout=2)
+        process.wait(timeout=3)
+        error_thread.join(timeout=2)
+        if state["error"]:
+            raise RuntimeError(str(state["error"]) + "; " + " | ".join(stderr_lines))
+        if process.returncode or not state["end_seen"]:
+            raise RuntimeError("捕获器异常结束：" + " | ".join(stderr_lines))
+    except KeyboardInterrupt:
+        interrupted = True
+    finally:
+        stop.set()
+        try:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
+        finally:
+            # Startup can fail before Popen returns or before either thread starts.
+            # Never join an unstarted thread or leave valid child pipes open.
+            for thread in (read_thread, error_thread):
+                if thread.ident is not None:
+                    thread.join(timeout=2)
+            if process is not None:
+                if process.stdout is not None:
+                    process.stdout.close()
+                if process.stderr is not None:
+                    process.stderr.close()
+    native = None
+    for line in reversed(stderr_lines):
+        try:
+            native = json.loads(line)
+            break
+        except ValueError:
+            pass
+    return {"mode": "live", "interrupted": interrupted, "wall_seconds": round(time.perf_counter() - start, 4),
+            "audio_seconds": round(audio_frames / 48000, 4), "first_packet_received_seconds": first_received,
+            "queue_dropped_packets": state["dropped"], "stale_packets_discarded": stale_packets,
+            "max_packet_processing_ms": round(maximum_processing_ms, 3),
+            "feature_frames": detector.feature_frames if detector else 0,
+            "events": dict(reporter.counts), "native_capture": native,
+            "latency_note": "Processing time is not microphone/speaker-to-AI end-to-end latency."}
+
+
+def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    parser = argparse.ArgumentParser(description="本地网易云音频变化检测：不联网、不上传、不保存原始音频。")
+    parser.add_argument("--seconds", type=float, default=60, help="实时检测秒数；0=持续到Ctrl+C，默认60，最长3600")
+    parser.add_argument("--pid", type=int, help="网易云主进程ID，默认自动查找")
+    parser.add_argument("--wav", type=Path, help="快速分析已有PCM16 WAV，不启动捕获")
+    parser.add_argument("--log", type=Path, help="新建JSONL日志路径，默认当前脚本目录；不覆盖已有文件")
+    parser.add_argument("--json", action="store_true", help="stdout输出结构化JSONL")
+    parser.add_argument("--meter-interval", type=float, default=1, help="实时状态输出间隔，0关闭")
+    parser.add_argument("--silence-db", type=float, default=-60, help="静音阈值dBFS；恢复阈值高8dB")
+    parser.add_argument("--rise-db", type=float, default=6, help="能量上升阈值dB")
+    parser.add_argument("--drop-db", type=float, default=8, help="能量下降阈值dB")
+    args = parser.parse_args()
+    if not math.isfinite(args.seconds) or args.seconds < 0 or args.seconds > 3600 or (0 < args.seconds < 1):
+        parser.error("--seconds 只能为0或1至3600")
+    if not math.isfinite(args.meter_interval) or args.meter_interval < 0:
+        parser.error("--meter-interval 必须是非负有限数")
+    reporter = None
+    try:
+        config = DetectorConfig(silence_dbfs=args.silence_db, resume_dbfs=args.silence_db + 8,
+                                energy_rise_db=args.rise_db, energy_drop_db=args.drop_db)
+        path = args.log or BASE / ("audio_events_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f") + ".jsonl")
+        reporter = Reporter(path, args.json)
+        print(f"事件日志：{path.resolve()}\n仅检测声音变化；事件时间不是歌曲播放位置。Ctrl+C 停止。", file=sys.stderr, flush=True)
+        summary = replay(args.wav, config, reporter) if args.wav else live(args.seconds, args.pid, config, reporter, args.meter_interval)
+        reporter.write({"kind": "summary", **summary})
+        return 0
+    except (OSError, ValueError, RuntimeError, EOFError, subprocess.SubprocessError) as exc:
+        if reporter:
+            reporter.write({"kind": "error", "error": str(exc)})
+        print(f"检测未完成：{exc}", file=sys.stderr)
+        return 1
+    finally:
+        if reporter:
+            reporter.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+END FILE: monitor_audio.py
+
+========================================================================
+BEGIN FILE: music_context.py
+BYTES: 7392
+SHA256: 56f57463118c6237f204b12a75b1d7a1de64f9e6c7d5416aee31657ce3a8df80
+========================================================================
+"""Read the current Windows media session through GSMTC (read-only).
+
+This module does not capture audio, control playback, access account credentials,
+or infer song position when Windows does not provide a timeline.
+
+Optional dependency: the PyWinRT Windows.Media.Control projection. Import is lazy
+so the rest of the project and its tests remain usable without Windows/PyWinRT.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from dataclasses import asdict, dataclass
+from typing import Any, AsyncIterator, Callable, Optional
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class MusicContext:
+    title: Optional[str] = None
+    artist: Optional[str] = None
+    album: Optional[str] = None
+    playback_status: str = "unknown"
+    position_seconds: Optional[float] = None
+    position_source: str = "unavailable"
+    position_confidence: str = "none"
+    duration_seconds: Optional[float] = None
+    source_app_id: Optional[str] = None
+    sampled_at_monotonic: float = 0.0
+    available: bool = False
+    error: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class GSMTCUnavailableError(RuntimeError):
+    """Raised when the Windows GSMTC API cannot be imported or initialized."""
+
+
+def _enum_name(value: Any) -> str:
+    if value is None:
+        return "unknown"
+    name = getattr(value, "name", None)
+    if name:
+        return str(name).lower()
+    text = str(value).rsplit(".", 1)[-1]
+    return text.lower() if text else "unknown"
+
+
+def _seconds(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    total = getattr(value, "total_seconds", None)
+    if callable(total):
+        try:
+            result = float(total())
+            return result if result >= 0 else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+    # Some projections expose TimeSpan as an integer count of 100 ns ticks.
+    try:
+        result = float(value) / 10_000_000.0
+        return result if result >= 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+class MusicContextReader:
+    """Poll the current GSMTC session without touching the audio stream.
+
+    `session_manager` is injectable for tests. Production initialization uses
+    `await MusicContextReader.create()`. By default, sessions whose source app
+    id does not contain `cloudmusic` are rejected to avoid reading another app.
+    Set `source_app_tokens=()` only if the local Windows installation exposes
+    a different, verified app id.
+    """
+
+    def __init__(
+        self,
+        session_manager: Any,
+        *,
+        source_app_tokens: tuple[str, ...] = ("cloudmusic",),
+    ) -> None:
+        self._manager = session_manager
+        self._source_app_tokens = tuple(t.casefold() for t in source_app_tokens)
+
+    @classmethod
+    async def create(
+        cls,
+        *,
+        source_app_tokens: tuple[str, ...] = ("cloudmusic",),
+    ) -> "MusicContextReader":
+        try:
+            from winrt.windows.media.control import (  # type: ignore[import-not-found]
+                GlobalSystemMediaTransportControlsSessionManager,
+            )
+        except Exception as exc:  # Import errors vary by PyWinRT distribution.
+            raise GSMTCUnavailableError(
+                "PyWinRT Windows.Media.Control is unavailable. Install a compatible "
+                "PyWinRT projection on Windows, then retry."
+            ) from exc
+        try:
+            manager = await GlobalSystemMediaTransportControlsSessionManager.request_async()
+        except Exception as exc:
+            raise GSMTCUnavailableError(f"GSMTC initialization failed: {exc}") from exc
+        return cls(manager, source_app_tokens=source_app_tokens)
+
+    def _is_target_app(self, app_id: Optional[str]) -> bool:
+        if not self._source_app_tokens:
+            return True
+        if not app_id:
+            return False
+        folded = app_id.casefold()
+        return any(token in folded for token in self._source_app_tokens)
+
+    async def read(self) -> MusicContext:
+        """Read one snapshot. API failures are returned as an unavailable context."""
+        sampled = time.monotonic()
+        try:
+            session = self._manager.get_current_session()
+            if session is None:
+                return MusicContext(sampled_at_monotonic=sampled)
+
+            app_id = getattr(session, "source_app_user_model_id", None)
+            if not self._is_target_app(app_id):
+                return MusicContext(
+                    source_app_id=str(app_id) if app_id else None,
+                    sampled_at_monotonic=sampled,
+                )
+
+            playback = session.get_playback_info()
+            status_obj = getattr(playback, "playback_status", None)
+            status = _enum_name(status_obj)
+
+            media = await session.try_get_media_properties_async()
+            timeline = session.get_timeline_properties()
+            position = _seconds(getattr(timeline, "position", None))
+            duration = _seconds(getattr(timeline, "end_time", None))
+
+            return MusicContext(
+                title=_clean(getattr(media, "title", None)),
+                artist=_clean(getattr(media, "artist", None)),
+                album=_clean(getattr(media, "album_title", None)),
+                playback_status=status,
+                position_seconds=position,
+                position_source="gsmTC_timeline" if position is not None else "unavailable",
+                position_confidence="system_reported" if position is not None else "none",
+                duration_seconds=duration,
+                source_app_id=str(app_id) if app_id else None,
+                sampled_at_monotonic=sampled,
+                available=True,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("GSMTC read failed: %s", exc)
+            return MusicContext(sampled_at_monotonic=sampled, error=f"{type(exc).__name__}: {exc}")
+
+    async def watch(
+        self,
+        *,
+        interval_seconds: float = 1.0,
+        include_position_updates: bool = False,
+    ) -> AsyncIterator[MusicContext]:
+        """Yield snapshots on track/status changes; optionally yield position ticks."""
+        if interval_seconds < 0.2:
+            raise ValueError("interval_seconds must be >= 0.2")
+        previous_key: Any = object()
+        while True:
+            context = await self.read()
+            key = (
+                context.title,
+                context.artist,
+                context.playback_status,
+                context.source_app_id,
+                context.available,
+                context.error,
+            )
+            if include_position_updates:
+                key += (None if context.position_seconds is None else round(context.position_seconds, 1),)
+            if key != previous_key:
+                yield context
+                previous_key = key
+            await asyncio.sleep(interval_seconds)
+
+
+def _clean(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
+async def read_current_music_context() -> MusicContext:
+    """Convenience one-shot read using the real Windows GSMTC API."""
+    reader = await MusicContextReader.create()
+    return await reader.read()
+END FILE: music_context.py
+
+========================================================================
+BEGIN FILE: requirements-gsmtc.txt
+BYTES: 173
+SHA256: 985e02c36062f083eb92f12984acff554e372adf41dea7c18da70988d560a2c9
+========================================================================
+# Optional dependency for the Windows GSMTC metadata reader only.
+# Install this separately; the audio detector itself does not need PyWinRT.
+winrt-Windows.Media.Control>=4
+END FILE: requirements-gsmtc.txt
+
+========================================================================
+BEGIN FILE: requirements.txt
+BYTES: 14
+SHA256: 04eacdebebc8a0359bcb843d6360a9da48409d6abd986bbad93d6c394086ce55
+========================================================================
+numpy==2.5.4
+END FILE: requirements.txt
+
+========================================================================
+BEGIN FILE: start_detection.cmd
+BYTES: 436
+SHA256: 8eb8bde31befc161cf96dcf552abb8d1ed1224bcb93a7a304270086a44e661e4
+========================================================================
+@echo off
+setlocal
+chcp 65001 >nul
+set "PYTHON=%~dp0.venv\Scripts\python.exe"
+if not exist "%PYTHON%" (
+  echo Local Python environment not found. Create .venv and install requirements.txt first.
+  pause
+  exit /b 1
+)
+echo Start music in NetEase Cloud Music. Press Ctrl+C to stop detection.
+echo Only acoustic events are logged locally; raw audio is not saved or uploaded.
+"%PYTHON%" "%~dp0monitor_audio.py" --seconds 0
+pause
+endlocal
+END FILE: start_detection.cmd
+
+========================================================================
+BEGIN FILE: test_audio_changes.py
+BYTES: 21282
+SHA256: 9088f01b2be101ab79314dacc7fc286030203d03924f505658d1052538fcb51a
+========================================================================
+"""Offline deterministic tests; never open a microphone or start recording."""
+from dataclasses import replace
+import io
+import json
+import math
+from pathlib import Path
+import queue
+import tempfile
+import threading
+import unittest
+from unittest.mock import patch
+
+import numpy as np
+
+from audio_changes import AudioChangeDetector, DetectorConfig
+from monitor_audio import END_FLAG, PACKET_HEADER, STREAM_HEADER, Reporter, live, read_header, read_packet, sequence_gap
+
+RATE = 48000
+
+
+def tone(seconds, amplitude=0.1, frequency=440):
+    t = np.arange(round(seconds * RATE)) / RATE
+    return (amplitude * np.sin(2 * np.pi * frequency * t)).astype(np.float32)
+
+
+def pulses(seconds, hz):
+    t = np.arange(round(seconds * RATE)) / RATE
+    envelope = 0.025 + 0.18 * np.exp(-40 * (t % (1 / hz)))
+    return (envelope * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+
+
+def run_signal(signal, config=None, chunk=2400):
+    channels = signal.shape[1] if signal.ndim == 2 else 1
+    detector = AudioChangeDetector(RATE, channels, config)
+    events = []
+    for start in range(0, len(signal), chunk):
+        events.extend(detector.feed(signal[start:start + chunk]))
+    return detector, events
+
+
+def changes(events):
+    return [e for e in events if e.type in ("energy_rise", "energy_drop", "texture_change", "rhythm_change")]
+
+
+class DetectorTests(unittest.TestCase):
+    def test_silence_once(self):
+        _, events = run_signal(np.zeros(RATE * 4, dtype=np.float32))
+        self.assertEqual([e.type for e in events], ["silence_start"])
+        self.assertAlmostEqual(events[0].detected_at_s, 0.7)
+
+    def test_quantization_noise_is_silent(self):
+        rng = np.random.default_rng(7)
+        signal = rng.integers(-1, 2, RATE * 2).astype(np.float32) / 32768
+        detector, events = run_signal(signal)
+        self.assertEqual(detector.state, "silence")
+        self.assertEqual([e.type for e in events], ["silence_start"])
+
+    def test_steady_tone_no_changes(self):
+        _, events = run_signal(tone(12))
+        self.assertEqual([e.type for e in events], ["audio_started"])
+
+    def test_antiphase_stereo_does_not_cancel(self):
+        signal = tone(4)
+        detector, events = run_signal(np.column_stack((signal, -signal)))
+        self.assertEqual(detector.state, "audio")
+        self.assertGreater(detector.last_features["rms_dbfs"], -30)
+        self.assertEqual([e.type for e in events], ["audio_started"])
+
+    def test_pause_resume(self):
+        _, events = run_signal(np.concatenate((tone(4), np.zeros(RATE * 2), tone(4))))
+        self.assertEqual([e.type for e in events], ["audio_started", "silence_start", "audio_resumed"])
+        self.assertLessEqual(events[1].detected_at_s - 4, 0.8)
+        self.assertLessEqual(events[2].detected_at_s - 6, 0.35)
+
+    def test_short_silent_gap_is_not_pause(self):
+        _, events = run_signal(np.concatenate((tone(4), np.zeros(round(RATE * 0.2)), tone(4))))
+        self.assertNotIn("silence_start", [e.type for e in events])
+
+    def test_energy_rise_and_cooldown(self):
+        _, events = run_signal(np.concatenate((tone(6, 0.035), tone(12, 0.24))))
+        rises = [e for e in events if e.type == "energy_rise"]
+        self.assertEqual(len(rises), 1)
+        self.assertGreater(rises[0].evidence["delta_db"], 10)
+        self.assertLessEqual(rises[0].detected_at_s - 6, 1.5)
+
+    def test_energy_drop(self):
+        _, events = run_signal(np.concatenate((tone(6, 0.24), tone(7, 0.035))))
+        drops = [e for e in events if e.type == "energy_drop"]
+        self.assertEqual(len(drops), 1)
+        self.assertLessEqual(drops[0].detected_at_s - 6, 1.5)
+
+    def test_short_energy_spike_ignored(self):
+        _, events = run_signal(np.concatenate((tone(6, 0.04), tone(0.15, 0.4), tone(6, 0.04))))
+        self.assertNotIn("energy_rise", [e.type for e in events])
+
+    def test_texture_at_constant_level(self):
+        _, events = run_signal(np.concatenate((tone(6, frequency=300), tone(7, frequency=3000))))
+        matches = [e for e in events if e.type == "texture_change"]
+        self.assertEqual(len(matches), 1)
+        self.assertGreater(matches[0].evidence["spectral_distance"], 0.7)
+        self.assertLessEqual(matches[0].detected_at_s - 6, 1.5)
+        self.assertNotIn("energy_rise", [e.type for e in events])
+
+    def test_rhythm_density_change(self):
+        _, events = run_signal(np.concatenate((pulses(6, 1), pulses(8, 4))))
+        matches = [e for e in events if e.type == "rhythm_change"]
+        self.assertTrue(matches, [e.to_dict() for e in events])
+        self.assertLessEqual(matches[0].detected_at_s - 6, 2.5)
+
+    def test_chunk_boundaries_do_not_change_results(self):
+        signal = np.concatenate((tone(5, 0.04), tone(4, 0.2), np.zeros(RATE), tone(2)))
+        first, a = run_signal(signal, chunk=2400)
+        second, b = run_signal(signal, chunk=997)
+        self.assertEqual([e.to_dict() for e in a], [e.to_dict() for e in b])
+        self.assertAlmostEqual(first.time_seconds, second.time_seconds)
+
+    def test_pcm16_conversion_and_alignment(self):
+        detector = AudioChangeDetector(RATE, 2)
+        pcm = np.column_stack((tone(1), tone(1))).astype(np.float64)
+        values = (pcm * 32767).astype("<i2")
+        events = detector.feed_pcm16(values.tobytes())
+        self.assertEqual([e.type for e in events], ["audio_started"])
+        with self.assertRaises(ValueError):
+            detector.feed_pcm16(b"\x00")
+
+    def test_reset_discards_pending_and_rewarms(self):
+        detector, _ = run_signal(tone(4, 0.04))
+        detector.feed(tone(0.2, 0.3))
+        gap = detector.reset(10, "test_gap")
+        self.assertEqual(gap.type, "capture_gap")
+        self.assertEqual(gap.stream_epoch, 1)
+        events = detector.feed(tone(2, 0.3))
+        self.assertEqual([e.type for e in events], ["audio_started"])
+        self.assertGreater(events[0].detected_at_s, 10)
+
+    def test_nonzero_capture_origin(self):
+        detector = AudioChangeDetector(RATE, 1, start_seconds=0.8)
+        events = detector.feed(tone(1))
+        self.assertAlmostEqual(events[0].detected_at_s, 1.05)
+        self.assertAlmostEqual(detector.time_seconds, 1.8)
+        with self.assertRaises(ValueError):
+            AudioChangeDetector(start_seconds=math.inf)
+
+    def test_reset_does_not_invent_silence(self):
+        detector, _ = run_signal(tone(2))
+        detector.reset(8)
+        self.assertEqual(detector.state, "initializing")
+        self.assertEqual(detector.feed_pcm16(b""), [])
+
+    def test_invalid_input(self):
+        detector = AudioChangeDetector(RATE, 1)
+        for value in (np.array([math.nan]), np.array([math.inf]), np.array([2.0])):
+            with self.assertRaises(ValueError):
+                detector.feed(value)
+        with self.assertRaises(ValueError):
+            detector.feed(np.zeros((4, 2)))
+        with self.assertRaises(ValueError):
+            detector.reset(-1)
+
+    def test_invalid_configuration(self):
+        for kwargs in ({"hop_seconds": 0}, {"silence_dbfs": -40, "resume_dbfs": -50},
+                       {"energy_rise_db": math.nan}, {"texture_distance": 2},
+                       {"history_seconds": 1}, {"minimum_baseline_seconds": 10}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                DetectorConfig(**kwargs)
+
+    def test_cooldown_is_respected(self):
+        config = replace(DetectorConfig(), event_cooldown_seconds=20)
+        signal = np.concatenate((tone(5, 0.03), tone(2, 0.3), tone(4, 0.03), tone(3, 0.3)))
+        _, events = run_signal(signal, config=config)
+        self.assertEqual(len([e for e in events if e.type == "energy_rise"]), 1)
+
+    def test_history_is_bounded(self):
+        detector, _ = run_signal(tone(15))
+        self.assertLessEqual(len(detector._history), 162)
+        self.assertLess(len(detector._buffer), detector.hop_frames)
+
+
+class ProtocolTests(unittest.TestCase):
+    def test_sequence_gaps_follow_consumed_order(self):
+        self.assertFalse(sequence_gap(None, 0))
+        self.assertTrue(sequence_gap(None, 4))
+        self.assertFalse(sequence_gap(0, 1))
+        self.assertTrue(sequence_gap(1, 6))
+        self.assertFalse(sequence_gap(6, 7))
+        self.assertTrue(sequence_gap(7, 7))
+        self.assertTrue(sequence_gap(7, 5))
+
+    def test_valid_header_and_packet(self):
+        stream = io.BytesIO(STREAM_HEADER.pack(b"NCM1", RATE, 2, 16) + PACKET_HEADER.pack(2, 1, 0.02) + b"\0" * 8)
+        rate, channels = read_header(stream)
+        packet = read_packet(stream, rate, channels)
+        self.assertEqual((packet.frames, packet.flags, packet.pcm), (2, 1, b"\0" * 8))
+
+    def test_heartbeat_and_end_have_no_pcm(self):
+        for flags in (0, END_FLAG):
+            packet = read_packet(io.BytesIO(PACKET_HEADER.pack(0, flags, 1.0)), RATE, 2)
+            self.assertEqual(packet.pcm, b"")
+            self.assertEqual(packet.frames, 0)
+
+    def test_truncated_packet_fails(self):
+        stream = io.BytesIO(PACKET_HEADER.pack(10, 0, 1.0) + b"\0" * 3)
+        with self.assertRaises(EOFError):
+            read_packet(stream, RATE, 2)
+
+    def test_bad_header_and_packet_fail(self):
+        with self.assertRaises(ValueError):
+            read_header(io.BytesIO(STREAM_HEADER.pack(b"XXXX", RATE, 2, 16)))
+        for frames, flags, timestamp in ((RATE + 1, 0, 1), (1, END_FLAG, 1), (0, 0, math.nan), (0, 0, -1)):
+            with self.subTest(frames=frames, flags=flags), self.assertRaises(ValueError):
+                read_packet(io.BytesIO(PACKET_HEADER.pack(frames, flags, timestamp)), RATE, 2)
+
+    def test_fragmented_reads(self):
+        class Fragmented(io.BytesIO):
+            def read(self, size=-1):
+                return super().read(min(size, 3))
+        stream = Fragmented(STREAM_HEADER.pack(b"NCM1", RATE, 2, 16))
+        self.assertEqual(read_header(stream), (RATE, 2))
+
+    def test_live_protocol_without_recording(self):
+        pcm = np.column_stack((tone(0.05), tone(0.05)))
+        raw = (pcm * 32767).astype("<i2").tobytes()
+        data = STREAM_HEADER.pack(b"NCM1", RATE, 2, 16)
+        for index in range(10):
+            data += PACKET_HEADER.pack(2400, 0, (index + 1) * 0.05) + raw
+        data += PACKET_HEADER.pack(0, END_FLAG, 0.5)
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = io.BytesIO(data)
+                self.stderr = io.BytesIO(b'{"packets":10}\n')
+                self.returncode = 0
+            def poll(self): return self.returncode
+            def wait(self, timeout=None): return self.returncode
+            def terminate(self): self.returncode = -1
+            def kill(self): self.returncode = -1
+
+        with tempfile.TemporaryDirectory() as directory:
+            reporter = Reporter(Path(directory) / "events.jsonl", True)
+            try:
+                with patch("monitor_audio.ensure_helper", return_value=Path("fake.exe")), \
+                     patch("monitor_audio.subprocess.Popen", return_value=FakeProcess()), \
+                     patch("monitor_audio.sys.platform", "win32"), patch("builtins.print"):
+                    result = live(1, 123, DetectorConfig(), reporter, 0)
+                self.assertEqual(result["audio_seconds"], 0.5)
+                self.assertEqual(result["events"], {"audio_started": 1})
+                self.assertEqual(result["native_capture"], {"packets": 10})
+            finally:
+                reporter.close()
+            entries = [json.loads(line) for line in (Path(directory) / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertTrue(any(row.get("type") == "audio_started" for row in entries))
+
+
+class LifecycleTests(unittest.TestCase):
+    class FakeProcess:
+        def __init__(self, data):
+            self.stdout = io.BytesIO(data)
+            self.stderr = io.BytesIO()
+            self.returncode = None
+        def poll(self): return self.returncode
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+        def terminate(self): self.returncode = -15
+        def kill(self): self.returncode = -9
+
+    def _invoke(self, process, reporter, *, popen_error=None):
+        with patch("monitor_audio.ensure_helper", return_value=Path("fake.exe")), \
+             patch("monitor_audio.subprocess.Popen", return_value=process, side_effect=popen_error), \
+             patch("monitor_audio.sys.platform", "win32"), patch("builtins.print"):
+            return live(1, 123, DetectorConfig(), reporter, 0)
+
+    def test_popen_failure_preserves_exception(self):
+        error = OSError("test process launch failure")
+        with tempfile.TemporaryDirectory() as directory:
+            reporter = Reporter(Path(directory) / "events.jsonl", True)
+            try:
+                with patch("monitor_audio.threading.Thread.start") as start:
+                    with self.assertRaises(OSError) as caught:
+                        self._invoke(None, reporter, popen_error=error)
+                self.assertIs(caught.exception, error)
+                start.assert_not_called()
+            finally:
+                reporter.close()
+
+    def test_popen_interrupt_without_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reporter = Reporter(Path(directory) / "events.jsonl", True)
+            try:
+                with patch("monitor_audio.threading.Thread.start") as start:
+                    result = self._invoke(None, reporter, popen_error=KeyboardInterrupt())
+                self.assertTrue(result["interrupted"])
+                self.assertEqual(result["audio_seconds"], 0)
+                start.assert_not_called()
+            finally:
+                reporter.close()
+
+    def _check_thread_start_failure(self, fail_at, error, *, after_start=False):
+        data = STREAM_HEADER.pack(b"NCM1", RATE, 2, 16) + PACKET_HEADER.pack(0, END_FLAG, 0.0)
+        process = self.FakeProcess(data)
+        real_start = threading.Thread.start
+        attempted = []
+
+        def start(thread):
+            attempted.append(thread)
+            if len(attempted) == fail_at:
+                if after_start:
+                    real_start(thread)
+                raise error
+            real_start(thread)
+
+        with tempfile.TemporaryDirectory() as directory:
+            reporter = Reporter(Path(directory) / "events.jsonl", True)
+            try:
+                with patch("monitor_audio.threading.Thread.start", new=start):
+                    if isinstance(error, KeyboardInterrupt):
+                        result = self._invoke(process, reporter)
+                        self.assertTrue(result["interrupted"])
+                    else:
+                        with self.assertRaises(type(error)) as caught:
+                            self._invoke(process, reporter)
+                        self.assertIs(caught.exception, error)
+                self.assertEqual(len(attempted), fail_at)
+                self.assertFalse(any(thread.is_alive() for thread in attempted))
+                self.assertEqual(process.returncode, -15)
+                self.assertTrue(process.stdout.closed)
+                self.assertTrue(process.stderr.closed)
+            finally:
+                reporter.close()
+
+    def test_first_thread_start_failure_cleans_child(self):
+        self._check_thread_start_failure(1, RuntimeError("first thread could not start"))
+
+    def test_second_thread_start_failure_cleans_child(self):
+        self._check_thread_start_failure(2, RuntimeError("second thread could not start"))
+
+    def test_thread_start_interrupts_clean_child(self):
+        for fail_at in (1, 2):
+            for after_start in (False, True):
+                with self.subTest(fail_at=fail_at, after_start=after_start):
+                    self._check_thread_start_failure(fail_at, KeyboardInterrupt(), after_start=after_start)
+
+    def test_interrupt_terminates_child(self):
+        process = self.FakeProcess(STREAM_HEADER.pack(b"NCM1", RATE, 2, 16) + PACKET_HEADER.pack(0, END_FLAG, 0.0))
+        with tempfile.TemporaryDirectory() as directory:
+            reporter = Reporter(Path(directory) / "events.jsonl", True)
+            try:
+                with patch.object(reporter, "write", side_effect=KeyboardInterrupt):
+                    result = self._invoke(process, reporter)
+                self.assertTrue(result["interrupted"])
+                self.assertEqual(process.returncode, -15)
+                self.assertTrue(process.stdout.closed)
+                self.assertTrue(process.stderr.closed)
+            finally:
+                reporter.close()
+
+    def test_bad_stream_terminates_child(self):
+        process = self.FakeProcess(b"bad header")
+        with tempfile.TemporaryDirectory() as directory:
+            reporter = Reporter(Path(directory) / "events.jsonl", True)
+            try:
+                with self.assertRaises(RuntimeError):
+                    self._invoke(process, reporter)
+                self.assertEqual(process.returncode, -15)
+                self.assertTrue(process.stdout.closed)
+            finally:
+                reporter.close()
+
+    def _run_queue_loss(self, queue_type, before_session=None):
+        pcm = np.column_stack((tone(0.01), tone(0.01)))
+        raw = (pcm * 32767).astype("<i2").tobytes()
+        data = STREAM_HEADER.pack(b"NCM1", RATE, 2, 16)
+        data += b"".join(PACKET_HEADER.pack(480, 0, (index + 1) * 0.01) + raw for index in range(70))
+        data += PACKET_HEADER.pack(0, END_FLAG, 0.71)
+        process = self.FakeProcess(data)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            reporter = Reporter(path, True)
+            original_write = reporter.write
+
+            def write(record):
+                if record["kind"] == "session" and before_session:
+                    before_session()
+                original_write(record)
+
+            try:
+                with patch("monitor_audio.queue.Queue", queue_type), patch.object(reporter, "write", side_effect=write):
+                    result = self._invoke(process, reporter)
+            finally:
+                reporter.close()
+            entries = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(process.stdout.closed)
+        self.assertTrue(process.stderr.closed)
+        return result, [row for row in entries if row.get("type") == "capture_gap"]
+
+    def test_missing_initial_packets_reset_at_first_consumed_packet(self):
+        filled = threading.Event()
+
+        class InitialOverflowQueue(queue.Queue):
+            def put_nowait(self, packet):
+                super().put_nowait(packet)
+                if packet.sequence == 69:
+                    filled.set()
+
+        result, gaps = self._run_queue_loss(
+            InitialOverflowQueue, lambda: self.assertTrue(filled.wait(2), "producer did not finish"))
+        self.assertEqual(result["queue_dropped_packets"], 6)
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]["evidence"]["reason"], "packet_sequence_gap")
+        self.assertAlmostEqual(gaps[0]["detected_at_s"], 0.06)
+
+    def test_future_queue_drops_do_not_reset_inflight_contiguous_packet(self):
+        allow_producer = threading.Event()
+        filled = threading.Event()
+
+        class FutureOverflowQueue(queue.Queue):
+            def put_nowait(self, packet):
+                if packet.sequence == 2 and not allow_producer.wait(2):
+                    raise RuntimeError("consumer did not release producer")
+                super().put_nowait(packet)
+                if packet.sequence == 69:
+                    filled.set()
+
+            def get(self, block=True, timeout=None):
+                packet = super().get(block=block, timeout=timeout)
+                if block and packet.sequence == 1:
+                    # Hold sequence 1 in flight while the producer drops 2..5.
+                    # It remains contiguous with 0: reset only when 6 is consumed.
+                    allow_producer.set()
+                    if not filled.wait(2):
+                        raise RuntimeError("producer did not complete overflow")
+                return packet
+
+        result, gaps = self._run_queue_loss(FutureOverflowQueue)
+        self.assertEqual(result["queue_dropped_packets"], 4)
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]["evidence"]["reason"], "packet_sequence_gap")
+        self.assertAlmostEqual(gaps[0]["detected_at_s"], 0.06)
+        self.assertAlmostEqual(result["audio_seconds"], 0.66)
+
+    def test_heartbeats_do_not_invent_silence(self):
+        data = STREAM_HEADER.pack(b"NCM1", RATE, 2, 16)
+        data += b"".join(PACKET_HEADER.pack(0, 0, i / 4) for i in range(1, 5))
+        data += PACKET_HEADER.pack(0, END_FLAG, 1.0)
+        process = self.FakeProcess(data)
+        with tempfile.TemporaryDirectory() as directory:
+            reporter = Reporter(Path(directory) / "events.jsonl", True)
+            try:
+                result = self._invoke(process, reporter)
+                self.assertEqual(result["audio_seconds"], 0)
+                self.assertEqual(result["events"], {})
+            finally:
+                reporter.close()
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+END FILE: test_audio_changes.py
+
+========================================================================
+BEGIN FILE: test_music_context.py
+BYTES: 3539
+SHA256: ac383e7e863dea2dd4ca6af1c183d66020963311d192f475cd2e57dacadabb0b
+========================================================================
+import asyncio
+import unittest
+from types import SimpleNamespace
+
+from music_context import MusicContextReader, _seconds
+
+
+class FakeSession:
+    source_app_user_model_id = "cloudmusic.exe"
+
+    def __init__(self, *, title="Test Song", artist="Test Artist", status="playing", position=12.5):
+        self._title = title
+        self._artist = artist
+        self._status = status
+        self._position = position
+
+    def get_playback_info(self):
+        return SimpleNamespace(playback_status=SimpleNamespace(name=self._status))
+
+    async def try_get_media_properties_async(self):
+        return SimpleNamespace(title=self._title, artist=self._artist, album_title="Album")
+
+    def get_timeline_properties(self):
+        from datetime import timedelta
+        return SimpleNamespace(
+            position=timedelta(seconds=self._position) if self._position is not None else None,
+            end_time=timedelta(seconds=180),
+        )
+
+
+class FakeManager:
+    def __init__(self, session):
+        self.session = session
+
+    def get_current_session(self):
+        return self.session
+
+
+class MusicContextTests(unittest.TestCase):
+    def test_reads_track_status_and_system_timeline(self):
+        async def run():
+            reader = MusicContextReader(FakeManager(FakeSession()))
+            result = await reader.read()
+            self.assertTrue(result.available)
+            self.assertEqual(result.title, "Test Song")
+            self.assertEqual(result.artist, "Test Artist")
+            self.assertEqual(result.playback_status, "playing")
+            self.assertEqual(result.position_seconds, 12.5)
+            self.assertEqual(result.position_source, "gsmTC_timeline")
+            self.assertEqual(result.position_confidence, "system_reported")
+        asyncio.run(run())
+
+    def test_rejects_non_netease_session(self):
+        async def run():
+            session = FakeSession()
+            session.source_app_user_model_id = "spotify.exe"
+            result = await MusicContextReader(FakeManager(session)).read()
+            self.assertFalse(result.available)
+            self.assertIsNone(result.title)
+        asyncio.run(run())
+
+    def test_no_session_is_not_an_error_or_silence(self):
+        async def run():
+            result = await MusicContextReader(FakeManager(None)).read()
+            self.assertFalse(result.available)
+            self.assertIsNone(result.error)
+            self.assertEqual(result.playback_status, "unknown")
+        asyncio.run(run())
+
+    def test_missing_position_is_not_fabricated(self):
+        async def run():
+            result = await MusicContextReader(FakeManager(FakeSession(position=None))).read()
+            self.assertIsNone(result.position_seconds)
+            self.assertEqual(result.position_source, "unavailable")
+            self.assertEqual(result.position_confidence, "none")
+        asyncio.run(run())
+
+    def test_api_exception_is_returned_as_error_context(self):
+        class BrokenManager:
+            def get_current_session(self):
+                raise RuntimeError("session unavailable")
+        async def run():
+            result = await MusicContextReader(BrokenManager()).read()
+            self.assertFalse(result.available)
+            self.assertIn("session unavailable", result.error)
+        asyncio.run(run())
+
+    def test_time_span_conversion(self):
+        from datetime import timedelta
+        self.assertEqual(_seconds(timedelta(seconds=2.5)), 2.5)
+        self.assertIsNone(_seconds(None))
+
+
+if __name__ == "__main__":
+    unittest.main()
+END FILE: test_music_context.py
+
+========================================================================
+BEGIN FILE: test_netease_audio.py
+BYTES: 7188
+SHA256: 7db9877bf55ea331fb827453e9966482222d2296dc8aade869407f67f8df6825
+========================================================================
+"""Capture only NetEase Cloud Music's process tree; all files stay local.
+
+Python 3.10+ / Windows 11. No pip packages needed.
+  python test_netease_audio.py                     # capture 10 seconds
+  python test_netease_audio.py --seconds 15        # up to 30 seconds
+  python test_netease_audio.py --analyze clip.wav   # no recording
+
+No microphone capture, client modification, login access, or uploads.
+A detected signal is NOT proof of music content, song identity, or sync accuracy.
+"""
+from __future__ import annotations
+
+import argparse
+import array
+from datetime import datetime
+import json
+import math
+import os
+from pathlib import Path
+import subprocess
+import sys
+import wave
+
+BASE = Path(__file__).resolve().parent
+
+
+def find_cloudmusic_pid() -> int:
+    command = (
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
+        "@(Get-CimInstance Win32_Process -Filter \"Name='cloudmusic.exe'\" | "
+        "Select-Object ProcessId,ParentProcessId) | ConvertTo-Json -Compress"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", command],
+        capture_output=True, encoding="utf-8-sig", check=True, timeout=20,
+    )
+    rows = json.loads(result.stdout) if result.stdout.strip() else []
+    if isinstance(rows, dict):
+        rows = [rows]
+    ids = {row["ProcessId"] for row in rows}
+    roots = [row["ProcessId"] for row in rows if row["ParentProcessId"] not in ids]
+    if not roots:
+        raise RuntimeError("未找到网易云音乐，请先启动客户端并播放歌曲。")
+    if len(roots) != 1:
+        raise RuntimeError(f"发现多个网易云主进程 {roots}，请用 --pid 指定目标。")
+    return roots[0]
+
+
+def ensure_helper() -> Path:
+    source = BASE / "ProcessLoopback.cs"
+    executable = BASE / "ProcessLoopback.exe"
+    if not executable.exists() or source.stat().st_mtime > executable.stat().st_mtime:
+        compiler = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+        if not compiler.is_file():
+            raise RuntimeError("未找到系统 .NET Framework x64 C# 编译器。")
+        subprocess.run(
+            [str(compiler), "-nologo", "-platform:x64", "-optimize+", f"-out:{executable}", str(source)],
+            check=True, timeout=30, stdout=sys.stderr,
+        )
+    return executable
+
+
+def dbfs(value: float) -> float | None:
+    return round(20 * math.log10(value), 2) if value > 0 else None
+
+
+def analyze(path: Path) -> dict:
+    with wave.open(str(path), "rb") as wav:
+        rate, channels, width = wav.getframerate(), wav.getnchannels(), wav.getsampwidth()
+        frames = wav.getnframes()
+        if width != 2 or wav.getcomptype() != "NONE":
+            raise ValueError("分析器只支持未压缩 PCM16 WAV。")
+        if frames * channels * width > 128 * 1024 * 1024:
+            raise ValueError("测试分析器只接受小于 128 MiB 的音频。")
+        raw = wav.readframes(frames)
+    if len(raw) != frames * channels * width:
+        raise ValueError("WAV 数据比文件头声明的帧数短，文件可能未写完。")
+    samples = array.array("h", raw)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    count = len(samples)
+    peak = max((abs(x) for x in samples), default=0) / 32768
+    rms = math.sqrt(sum(x * x for x in samples) / count) / 32768 if count else 0
+    threshold = 10 ** (-65 / 20)
+    windows = []
+    hop = rate * channels
+    for start in range(0, count, hop):
+        chunk = samples[start:start + hop]
+        level = math.sqrt(sum(x * x for x in chunk) / len(chunk)) / 32768
+        windows.append({"start_seconds": start / hop, "rms_dbfs": dbfs(level)})
+    clipped = sum(x >= 32767 or x <= -32768 for x in samples)
+    if not count:
+        status = "no_audio_frames"
+    elif rms < threshold:
+        status = "near_silence"
+    else:
+        status = "signal_detected"
+    return {
+        "file": str(path.resolve()), "sample_rate": rate, "channels": channels,
+        "bits_per_sample": width * 8, "frames": frames, "duration_seconds": frames / rate,
+        "rms_dbfs": dbfs(rms), "peak_dbfs": dbfs(peak),
+        "clipped_samples": clipped, "clipped_fraction": clipped / count if count else 0,
+        "signal_status": status, "near_silence_threshold_dbfs": -65,
+        "per_second_levels": windows,
+        "limitations": [
+            "信号阈值是测试启发式；检测到信号不等于已经识别出音乐或歌名。",
+            "进程包含过滤已启用，但本测试未进行其它应用声音的对照隔离实验。",
+            "音频包到达间隔不是从扬声器发声到AI开口的端到端延迟。",
+        ],
+    }
+
+
+def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    parser = argparse.ArgumentParser(description="本地网易云进程级录音测试，不上传音频。")
+    parser.add_argument("--seconds", type=float, default=10)
+    parser.add_argument("--pid", type=int, help="目标 cloudmusic 主进程 ID；默认自动选择")
+    parser.add_argument("--analyze", type=Path, help="只分析已有 WAV，不录音")
+    args = parser.parse_args()
+    if args.analyze:
+        print(json.dumps(analyze(args.analyze), ensure_ascii=False, indent=2))
+        return 0
+    if sys.platform != "win32":
+        parser.error("进程级捕获需要 Windows。")
+    if not math.isfinite(args.seconds) or not 1 <= args.seconds <= 30:
+        parser.error("--seconds 必须介于 1 和 30 之间。")
+    pid = args.pid if args.pid is not None else find_cloudmusic_pid()
+    executable = ensure_helper()
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    output = BASE / f"netease_{stamp}.wav"
+    print(f"即将录制网易云进程树 PID={pid}，时长 {args.seconds:g} 秒。请确认音乐正在播放。", flush=True)
+    print("仅存本地，不录麦克风；不会自动启动或改变音乐播放。", flush=True)
+    result = subprocess.run(
+        [str(executable), str(pid), str(args.seconds), str(output)],
+        capture_output=True, encoding="utf-8-sig", timeout=args.seconds + 20,
+    )
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or f"捕获器退出码 {result.returncode}")
+    capture = json.loads(result.stdout.strip())
+    report = analyze(output)
+    report["capture"] = capture
+    report_path = output.with_suffix(".json")
+    with report_path.open("x", encoding="utf-8") as handle:
+        json.dump(report, handle, ensure_ascii=False, indent=2)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    print(f"分析报告：{report_path}")
+    if report["signal_status"] != "signal_detected":
+        print("接口已运行，但没有足够强的音频信号；请确认播放、网易云音量及输出设置后复测。")
+        return 4
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"测试未完成：{error}", file=sys.stderr)
+        raise SystemExit(1)
+END FILE: test_netease_audio.py

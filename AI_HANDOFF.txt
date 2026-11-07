@@ -1,0 +1,300 @@
+网易云音乐本地音频变化检测器 — AI 接手说明
+打包日期：2026-11-07
+交付类型：可审阅、可继续开发的源码包；不是免安装应用。
+
+一、先读什么
+
+1. AI_HANDOFF.txt：本说明，包含已完成内容、运行方式与明确边界。
+2. ASK_NEXT_AI.txt：可以直接粘贴给其他 AI 的接手提示词。
+3. ALL_IN_ONE.txt：本说明、提示词、全部源码及验证摘要的整合版本。
+   不能解压 ZIP 的 AI 可直接读取这一份 UTF-8 文本；它不是可执行程序。
+4. 原始源码文件：需要运行或修改项目时使用这些文件，不要运行整合文本。
+5. evidence/：实际验证摘要、事件日志及打包时测试结果。
+6. manifest.sha256：除清单自身以外，各个归档文件的 SHA-256 校验值。
+
+二、项目目标与当前完成度
+
+最终目标是“AI 陪用户边听网易云音乐边聊天”，而不是播放结束后写乐评。
+用户希望对关键音乐变化作出及时反应，不能接受超过 30 秒的体验延迟。
+原计划采用 Python 后端和大模型 API，可选本地小模型；用户表示已有第三方
+网易云接口的歌单与歌曲信息能力，但本源码包没有集成或验证这些第三方接口。
+
+当前已完成的是第一块基础能力：仅在本机捕获网易云进程树的声音，连续计算
+轻量声学特征，输出变化候选事件。没有实现“完整 AI 陪听助手”。
+
+已完成：
+- Windows 进程树 WASAPI loopback 音频捕获。
+- 48 kHz、双声道、16-bit PCM 的持续流与受限时长 WAV 录音探针。
+- 持续安静、声音开始/恢复、能量升降、频带分布/音色变化、节奏密度变化候选。
+- 阈值确认、迟滞、同类事件冷却及全局变化事件冷却。
+- 捕获间断、积压和过期音频的检测与重置，不把缺失数据伪造为静音。
+- 本地 JSONL 事件日志、控制台读数、已有 WAV 的离线快速回放。
+- 可直接调用的 Python 检测器、自动化测试、Windows 双击运行入口。
+
+尚未实现：
+- 歌名识别、歌词识别、歌曲绝对播放进度或网易云播放控制。
+- 自动副歌识别、情绪理解、乐器识别或完整音乐语义分析。
+- 大模型调用、语音合成、语音聊天、语义模型、用户记忆或数据库。
+- 第三方网易云 API、登录、账户信息或客户端逆向。
+
+三、不可混淆的边界
+
+1. 检测到能量上升，不等于识别到了副歌。
+2. silence_start 只表示持续低电平，不证明用户按了暂停。
+3. capture_stalled 表示收不到 PCM，不把它解释为音乐安静。
+4. event_time_s 是阈值候选首次满足的时刻；detected_at_s 包含确认窗口。
+5. 时间轴是本次采集/回放会话的时间，不是歌曲进度。
+6. 音频包处理耗时不是“扬声器发声到 AI 开口”的端到端延迟。
+7. 模块是启发式检测器，候选事件可能误报或漏报，不能当成置信概率。
+8. 进程包含过滤已启用，但尚未完成其它应用同时发声的对照隔离实验。
+9. 不采集麦克风、不注入或修改客户端、不访问登录态，不调用网络或模型 API。
+   依赖安装可能需要联网；音频检测本身不联网。
+10. 实时 monitor 模式默认不保存原始音频。test_netease_audio.py 的录音模式
+    则会生成本地 WAV 和分析 JSON，必须区分这两个入口。
+
+四、文件职责
+
+ProcessLoopback.cs
+  C# 原生 Windows 捕获器与 COM 接口声明。仅允许名为 cloudmusic 的目标进程。
+  以进程树包含模式捕获；支持二进制 stdout 流或 1～30 秒 WAV 文件。
+  使用系统 .NET Framework x64 编译器，不依赖 dotnet SDK。
+
+test_netease_audio.py
+  早期音频录制/分析探针，也提供 find_cloudmusic_pid() 和 ensure_helper()。
+  monitor_audio.py 依赖这两个函数。虽然以 test_ 开头，它不是 unittest 套件；
+  不要误删。PID 自动选择网易云根进程；多个根进程时要求 --pid。
+  首次运行实时入口时会按需将 ProcessLoopback.cs 编译成同目录的 exe。
+
+music_context.py
+  新增的 GSMTC 只读歌曲上下文读取器。通过 Windows.Media.Control 查询当前系统媒体会话，
+  默认仅接受 source_app_user_model_id 中包含 cloudmusic 的会话。提供歌曲名、歌手、
+  专辑、播放状态、系统时间线位置（若 API 提供）及 watch() 变化迭代器。
+  不捕获音频、不控制播放器；没有时间线时 position_seconds 保持 null，不伪造进度。
+  PyWinRT 导入为惰性导入，因此原检测器在未安装 PyWinRT 时仍可运行。
+
+check_music_context.py
+  Windows GSMTC 单次诊断入口，输出 JSON；用于先验证当前网易云客户端是否暴露会话。
+
+requirements-gsmtc.txt
+  可选 PyWinRT 依赖，仅 GSMTC 模块需要；与原 requirements.txt 分开，避免影响音频检测器。
+
+test_music_context.py
+  GSMTC 读取器的模拟对象单元测试；不要求 Windows、不连接真实网易云客户端。
+
+audio_changes.py
+  无 Windows 捕获依赖的状态化检测核心；NumPy 特征提取与事件判定。
+  AudioChangeDetector、DetectorConfig、ChangeEvent 是主要可复用接口。
+
+monitor_audio.py
+  实时/回放 CLI、NCM1 流解析、子进程与线程清理、有界队列、过期数据处理、
+  控制台和 JSONL 日志输出。实时模式启动 C# 子进程。
+
+test_audio_changes.py
+  37 个 unittest 方法，含确定性合成音频、协议、丢包和启动清理回归测试。
+  实时协议测试使用模拟进程，不会打开麦克风或实际录音。
+
+requirements.txt
+  当前锁定 numpy==2.5.4；该版本已经在本机 Python 3.13.9 中安装并测试。
+
+start_detection.cmd
+  使用项目内 .venv，启动连续检测。不会自动创建环境或安装依赖。
+
+evidence/verification_results.json
+  开发阶段验证摘要；其中 real_runs 是早期运行记录，final_live_smoke 和
+  final_replay 是最终修复后的验证。不要将早期记录当成最终修订的实测。
+
+evidence/*.jsonl
+  与上述摘要对应的事件/特征日志，不含 PCM。回放日志里的绝对 input 路径
+  在本包副本中仅保留文件名；原始日志未修改。原 WAV 没有打包。
+
+evidence/package_checks.json、evidence/package_unittest.txt
+  打包阶段对源码副本的测试与编译检查结果；本地环境下可复验，
+  不能证明其它机器或不同 Windows/网易云版本一定兼容。
+
+五、运行方式（Windows CMD，先在解压后的项目目录打开终端）
+
+推荐环境：64 位 Windows 11、Python 3.13、可用的系统 .NET Framework x64 csc.exe。
+本机验证环境为 Windows 11 build 26200 / Python 3.13.9 / NumPy 2.5.4 /
+网易云音乐 3.1.42.205594。未测试所有 Windows 版本，不承诺 Windows 10 兼容。
+离线检测核心不依赖 Windows 捕获，但整包未做其它系统的兼容性验证。
+
+首次准备（需要本机 Python 已安装；pip 安装可能联网）：
+  python -m venv .venv
+  .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+先运行不会录音的单元测试：
+  .venv\Scripts\python.exe -m unittest -v test_audio_changes
+
+播放网易云音乐，再检测 15 秒：
+  .venv\Scripts\python.exe monitor_audio.py --seconds 15
+
+持续运行，Ctrl+C 停止：
+  .venv\Scripts\python.exe monitor_audio.py --seconds 0
+  或者双击 start_detection.cmd。
+
+输出机器可读 JSONL（stdout）；提示信息走 stderr：
+  .venv\Scripts\python.exe monitor_audio.py --seconds 15 --json
+
+指定新日志名称（已存在会拒绝覆盖，每次复测换新名称）：
+  .venv\Scripts\python.exe monitor_audio.py --seconds 15 --log run_001.jsonl
+
+离线回放自己的未压缩 PCM16 WAV（不启动实时捕获）：
+  .venv\Scripts\python.exe monitor_audio.py --wav "your_clip.wav" --json
+  your_clip.wav 是需要自行提供的输入，不在本包内。
+
+只有确实需要新录音时才使用以下命令；它会保存本地 WAV：
+  .venv\Scripts\python.exe test_netease_audio.py --seconds 10
+
+实时入口的 --seconds 默认 60，0 表示持续到中断，有限时长允许 1～3600。
+--meter-interval 0 关闭状态读数；--silence-db、--rise-db、--drop-db 可调阈值。
+更完整的参数见 monitor_audio.py --help。
+
+没有 .venv 时双击启动脚本会提示先安装环境。这不是打包缺文件：
+为便于 AI 阅读和跨目录迁移，ZIP 特意排除了虚拟环境与编译产物。
+
+六、数据流与接口
+
+网易云 cloudmusic 进程树
+  -> Windows WASAPI Process Loopback（ProcessLoopback.cs）
+  -> NCM1 二进制 stdout 管道
+  -> monitor_audio.py 读取线程 + 最多 64 包队列
+  -> AudioChangeDetector.feed_pcm16()
+  -> ChangeEvent
+  -> Reporter / JSONL / 控制台
+
+核心调用示例（pcm_bytes 必须由上游提供，不是字符串）：
+  from audio_changes import AudioChangeDetector
+  detector = AudioChangeDetector(sample_rate=48000, channels=2)
+  events = detector.feed_pcm16(pcm_bytes)
+  for event in events:
+      print(event.to_dict())
+
+每个流保留同一个 detector，不能每次来一个音频块就新建实例。
+PCM 必须为小端、有符号 16-bit、按声道交错，长度必须是完整音频帧的倍数。
+feed(samples) 也接受归一化浮点数组，形状为 (frames, channels)。
+上游出现丢包后调用 reset(at_seconds, reason)；重置时间不能倒退。
+
+ChangeEvent 字段：
+  type                  事件名
+  event_time_s          首次满足候选条件的会话时间
+  detected_at_s         确认并输出时的会话时间
+  confirmation_seconds  to_dict() 添加的确认间隔
+  stream_epoch          每次 reset 增加
+  evidence              RMS、能量差、频谱距离或节奏密度等声学证据
+  time_basis            固定 capture_session_seconds
+
+实时/回放日志按 kind 区分 session、event、status、summary、error。
+不是每一行都是事件；下游必须先检查 kind。
+
+七、NCM1 原生流协议
+
+所有数值使用 little-endian，stdout 不得混入文字。
+流头共 16 字节，Python 格式 <4sIII：
+  magic=b"NCM1"，sample_rate=48000，channels=2，bits_per_sample=16。
+
+每个数据包头共 16 字节，格式 <IId：
+  uint32 frames
+  uint32 flags
+  double received_seconds
+随后为 frames * channels * 2 字节 PCM。
+
+flags 低三位保持 WASAPI 标志：1=数据间断，2=显式静音包，4=时间戳错误。
+frames=0、flags=0 是心跳，没有 PCM；心跳不表示静音。
+frames=0、flags=0x80000000 是正常结束。
+received_seconds 是从原生 Start 起计时的接收时间，不是播放软件时间轴。
+原生诊断/汇总 JSON 在 stderr；流读取必须支持不完整的分段 read。
+
+首包用 received_seconds - packet_duration 近似锚定采集起点。
+读取线程对真正的 PCM 包连续编号；消费者发现实际序号缺口时才重置，
+不能用生产者的累计丢包数提前重置仍在处理的连续包。
+队列过载丢弃最旧包，超过 0.5 秒队列年龄的包也不再分析。
+连续 1 秒无 PCM 报 capture_stalled；恢复后重置而不是补静音。
+
+八、默认检测参数与行为
+
+- 50 ms 特征步长，保留约 8 秒历史。
+- RMS 计算响度，频带归一化功率描述音色，瞬态密度描述节奏变化候选。
+- 对声道功率求平均，而不是直接混合波形，避免反相双声道互相抵消。
+- 安静阈值 -60 dBFS，持续 0.7 秒确认。
+- 恢复阈值 -52 dBFS，持续 0.25 秒确认。
+- 基线窗口最多 4 秒，排除最近 1 秒，至少要积累 2 秒有效基线。
+- 最近窗口 0.4 秒；能量上升默认 +6 dB，下降默认 -8 dB。
+- 音色变化使用频带分布的总变差距离，默认阈值 0.38。
+- 节奏使用 1.5 秒近期瞬态窗口，不是精确 BPM 或拍点识别。
+- 同类变化默认冷却 8 秒；不同变化之间至少间隔 1.5 秒。
+- 初次启动/重置需要积累基线，不能立即给出有依据的编配变化。
+
+九、已有验证与限制
+
+开发阶段最终自动测试：37/37 通过。
+队列丢包和线程启动中断的 3 个回归场景各重复 10 次，30/30 通过。
+覆盖静音/恢复、短暂波动、能量、音色、节奏、反相立体声、输入校验、
+数据块边界一致性、历史有界、协议截断、初始/中途丢包以及子进程清理。
+
+实机：
+- 用户曾确认 9.98 秒录音的声音正确。该录音出于体积与隐私考虑未打包。
+- 早期 15 秒实时流收到 14.98 秒音频，无报告的丢包或间断。
+- 最终修复后的 5 秒实时检测收到 4.75 秒近静音音频，触发一次 silence_start；
+  无队列丢包、过期包和原生间断，退出后未发现残留捕获器。
+- 最终回放先前录音，输出 audio_started 和 rhythm_change 候选；
+  JSON stdout 与落盘日志一致。不是对音乐事件做过人工标注的准确率评测。
+- 验证过已有 WAV/事件日志不被覆盖、消费者管道关闭后原生捕获器退出。
+
+合成受控信号中的示例检测延迟：安静 0.70 秒、恢复 0.25 秒、能量上升
+0.65 秒、音色变化 0.75 秒、节奏变化 1.05 秒。不能推广为真实音乐或
+AI 语音回答的保证；这不是“已经实现低延迟陪聊”。
+
+仍未验证：跨应用声音对照隔离、人工实时暂停/恢复流程、小时级稳定性、
+不同 Windows/网易云/音频设备版本以及完整 AI 语音链路延迟。
+没有包含私有录音，所以接手者可以重跑合成测试，但无法只靠本包重放
+历史音乐实测；应自行准备合法且允许使用的 PCM16 音频。
+
+十、后续开发建议（尚未实现，也不是自动授权）
+
+建议先补可重复的实机暂停/恢复、其它应用同时发声、设备切换和长时间
+运行测试，测误报与漏报，再考虑加入“变化事件 -> 语义分析/LLM -> 回复”层。
+保留本地便宜检测作触发器，避免把每个 50 ms 音频块都发送给大模型。
+
+如果将来要联网发送音频、接入外部模型、控制播放器或持久化用户资料，
+先明确授权、数据范围、费用和实际接口；当前包不包含这些权限或 API 密钥。
+不要虚构网易云提供了可靠实时播放进度，也不要把候选变化直接标成副歌。
+
+修改时特别保留：
+- cloudmusic 进程范围限制；不要改成整个桌面或麦克风采集。
+- PCM 管道 stdout 的纯二进制协议和 JSON 模式的纯 JSONL stdout。
+- 心跳/缺包与真正静音之间的区别。
+- 按消费者实际包序号定位间断。
+- 首包时钟原点与 reset 后的单调时间。
+- Popen 或线程启动异常、Ctrl+C、消费者断连时的退出清理。
+- 不覆盖用户已有录音或日志。
+
+十一、打包处理说明
+
+源码文件以原始字节复制，没有为了打包修改算法或运行逻辑。
+仅对本包的回放日志副本做 input 路径最小化：本机绝对目录替换为文件名。
+其余事件、时间与测量值保留。历史 PID 只用于说明当次运行，不可硬编码复用。
+排除 .venv、__pycache__、.pyc、.exe、所有原始 WAV、账户文件及无关材料。
+原有项目文件和录音仍留在原工作目录，本次没有删除或覆盖它们。
+
+
+
+十二、GSMTC 歌曲上下文模块（新增，尚待 Windows 实机验证）
+
+新增 music_context.py，采用 Windows Global System Media Transport Controls（GSMTC）
+只读当前媒体会话。先先安装可选依赖：
+  .venv\Scripts\python.exe -m pip install -r requirements-gsmtc.txt
+再在网易云正在播放时运行：
+  .venv\Scripts\python.exe check_music_context.py
+
+输出字段包括 title、artist、album、playback_status、position_seconds、
+position_source、position_confidence、duration_seconds、source_app_id。
+默认只接受 source_app_user_model_id 含 cloudmusic 的会话；如果实际 Windows
+环境返回不同 app id，应先人工核实后再调整 source_app_tokens，不要直接关闭过滤。
+
+position_seconds 仅在 GSMTC timeline 实际提供时填写；它是系统报告的位置，
+不是本项目独立测得的真值。缺失时返回 null，不使用采集会话时长冒充歌曲进度。
+本模块暂未接入 monitor_audio.py，也未改变音频检测器；下一步应在目标 Windows
+机器验证歌名/播放状态/position 是否稳定更新，再将快照包装进统一 MusicContext。
+
+新增测试：
+  .venv\Scripts\python.exe -m unittest -v test_audio_changes test_music_context

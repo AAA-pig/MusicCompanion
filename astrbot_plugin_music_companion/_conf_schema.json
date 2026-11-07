@@ -1,0 +1,45 @@
+{
+  "enabled": {
+    "description": "启用音乐上下文接入",
+    "type": "bool",
+    "default": true,
+    "hint": "只读跟踪本地 JSONL，并向普通 QQ 回复注入最近音乐快照。"
+  },
+  "log_dir": {
+    "description": "音乐事件日志目录",
+    "type": "string",
+    "default": "C:\\Users\\20708\\Desktop\\音乐伴侣\\music_companion_iteration_001\\music_companion",
+    "hint": "monitor_audio.py 生成 audio_events_*.jsonl 的目录；插件启动时不回放历史事件。"
+  },
+  "proactive_enabled": {
+    "description": "允许音乐事件触发主动消息",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后可能调用收费模型并发送真实 QQ 消息；还必须填写明确的目标 UMO。"
+  },
+  "target_umo": {
+    "description": "主动消息目标 UMO",
+    "type": "string",
+    "default": "",
+    "hint": "填写经过确认的完整 unified_msg_origin，不会从最近聊天猜测目标。"
+  },
+  "provider_id": {
+    "description": "音乐决策 Provider ID",
+    "type": "string",
+    "default": "",
+    "hint": "留空时使用目标会话当前 Provider；只发送文本和结构化事件，不发送音频。"
+  },
+  "proactive_cooldown_seconds": {
+    "description": "主动分析冷却时间（秒）",
+    "type": "int",
+    "slider": {"min": 15, "max": 900, "step": 15},
+    "default": 45
+  },
+  "llm_timeout_seconds": {
+    "description": "音乐决策模型超时（秒）",
+    "type": "int",
+    "slider": {"min": 2, "max": 25, "step": 1},
+    "default": 12,
+    "hint": "与2秒事件合并、1秒轮询和1秒发送超时共同限制总延迟。"
+  }
+}

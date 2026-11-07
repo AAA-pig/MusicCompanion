@@ -1,0 +1,10 @@
+name: astrbot_plugin_music_companion
+display_name: 音乐伴侣
+author: local
+description: 将本机网易云结构化音乐事件接入 AstrBot 的 LLM 与 QQ 闭环。
+desc: 只读跟踪 audio_events JSONL，不上传原始音频；主动发送默认关闭。
+repo: local
+version: 0.1.0
+support_platforms:
+  - aiocqhttp
+astrbot_version: ">=4.0.0"

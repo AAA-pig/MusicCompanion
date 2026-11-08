@@ -11,6 +11,18 @@
 - 把快照折算成可数的听歌行为（听多久、听完还是跳过、几点在听），可按段查询。
 - 不发送 WAV、PCM、音频包或音频 URL，不控制播放器。
 
+## 设计原则（改动前先读）
+
+这套东西的底子是 solo-fm 那台「只服务一个人的私人电台」。技术层可以加，但这几条不能动：
+
+- **它会开口。** 歌与歌之间说一句，是这台电台的存在方式；只在被问到时才说话，就退化成播放器了。
+- **它记得。** 记忆不是查询用的附属表，要能自然地出现在它说的话里。
+- **它说得短。** 一首歌一句，像熟人聊歌，不是百科，也不是状态播报。
+- **它知道什么时候轻。** 深夜话少、声音低；安静不等于永远不说。
+- **它不假装。** 没听到的部分、系统没给的进度，都不编。
+
+`tests/test_memory_prompt.py` 里的 `OriginalHeartTests` 就是给这几条上的锁。
+
 ## 前置条件
 
 先在音乐项目中运行检测，并启用 GSMTC 歌曲上下文：
@@ -29,6 +41,8 @@ uv run --no-project --directory "<音乐项目目录>" python monitor_audio.py -
 | `log_dir` | `monitor_audio.py` 生成 `audio_events_*.jsonl` 的目录。 |
 | `memory_enabled` | 启用音乐行为记忆，默认 `true`。 |
 | `memory_db` | 记忆库路径，留空时用 `log_dir` 下的 `music.db`。 |
+| `memory_prompt_enabled` | 让记忆参与说话，默认 `true`；关掉后只能用命令/工具查。 |
+| `memory_prompt_max_chars` | 注入的记忆段字数上限，默认 600。 |
 | `session_gap_seconds` | 听歌会话切分间隔，默认 300 秒。 |
 | `proactive_enabled` | 是否允许音乐事件触发真实模型调用和主动 QQ 消息，默认 `false`。 |
 | `target_umo` | 主动消息的完整 AstrBot unified message origin，启用主动发送前必须确认；同时用作记忆查询的归属校验。 |

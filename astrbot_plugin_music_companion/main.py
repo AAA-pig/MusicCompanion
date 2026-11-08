@@ -18,6 +18,7 @@ from .bridge import (
     JsonlTailer,
     MusicEventState,
     build_decision_prompt,
+    build_memory_prompt,
     format_note_lines,
     format_track_lines,
     observation_from_record,
@@ -92,6 +93,11 @@ class MusicCompanionPlugin(Star):
         )
         self.session_gap_seconds = float(config.get("session_gap_seconds", 300))
         self._memory_db = str(config.get("memory_db") or "").strip()
+        self.memory_prompt_enabled = bool(config.get("memory_prompt_enabled", True))
+        self.memory_prompt_max_chars = min(
+            2000, max(120, int(config.get("memory_prompt_max_chars", 600)))
+        )
+        self._memory_section_cache: tuple[str, float] = ("", 0.0)
         self.memory: Any = None
         self.recorder: Any = None
 
@@ -173,6 +179,29 @@ class MusicCompanionPlugin(Star):
                 continue
             for text in written:
                 self._trace("memory_note", text=text[:200])
+
+    def _memory_section(self) -> str:
+        """让记忆真的参与说话，而不是只躺在查询命令里。
+
+        原作里"记得"是这台电台不变成通用播放器的原因，所以它得进提示词，
+        但只作为可以带出的一点，不是每轮都要提的清单。
+        """
+        if not self.memory_enabled or not self.memory_prompt_enabled or self.memory is None:
+            return ""
+        now = time.monotonic()
+        cached_text, cached_at = self._memory_section_cache
+        if cached_text and now - cached_at < 20:
+            return cached_text
+        try:
+            text = build_memory_prompt(
+                self.memory.digest(limit=4),
+                max_chars=self.memory_prompt_max_chars,
+            )
+        except Exception as exc:
+            self._trace("memory_prompt_failed", error=str(exc)[:120])
+            return ""
+        self._memory_section_cache = (text, now)
+        return text
 
     async def terminate(self) -> None:
         self._stopping.set()
@@ -266,6 +295,9 @@ class MusicCompanionPlugin(Star):
         system_prompt = DECISION_SYSTEM_PROMPT
         if scene_prompt:
             system_prompt += "\n\n以下是陪伴宿主当前场景，只取与音乐事件相关的内容：\n" + scene_prompt
+        memory_prompt = self._memory_section()
+        if memory_prompt:
+            system_prompt += "\n\n" + memory_prompt
         try:
             response = await asyncio.wait_for(
                 provider.text_chat(
@@ -316,7 +348,11 @@ class MusicCompanionPlugin(Star):
         """向普通 QQ 对话注入最近音乐快照，不额外调用模型。"""
         if not self.enabled:
             return
-        section = self.state.context_prompt(time.monotonic())
+        parts = [
+            self.state.context_prompt(time.monotonic()),
+            self._memory_section(),
+        ]
+        section = "\n\n".join(part for part in parts if part)
         if section:
             req.system_prompt = str(getattr(req, "system_prompt", "") or "") + "\n\n" + section
 

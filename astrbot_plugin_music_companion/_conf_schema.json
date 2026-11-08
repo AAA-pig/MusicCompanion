@@ -23,10 +23,31 @@
     "default": "",
     "hint": "留空时使用日志目录下的 music.db；与对话记忆分开存放，互不影响。"
   },
+  "memory_prompt_enabled": {
+    "description": "让音乐记忆参与说话",
+    "type": "bool",
+    "default": true,
+    "hint": "把最近听歌记下的东西作为可以参考的一点塞进提示词；关掉后记忆只能通过命令和工具查询。"
+  },
+  "memory_prompt_max_chars": {
+    "description": "记忆注入字数上限",
+    "type": "int",
+    "slider": {
+      "min": 120,
+      "max": 2000,
+      "step": 100
+    },
+    "default": 600,
+    "hint": "只截断注入的那一段，不影响记忆库本身；默认 600 字，够说一两件事。"
+  },
   "session_gap_seconds": {
     "description": "听歌会话切分间隔（秒）",
     "type": "int",
-    "slider": {"min": 60, "max": 1800, "step": 60},
+    "slider": {
+      "min": 60,
+      "max": 1800,
+      "step": 60
+    },
     "default": 300,
     "hint": "连续播放、中断不超过这个时长算同一段；一段结束才写一条汇总，避免逐首刷流水。"
   },
@@ -51,13 +72,21 @@
   "proactive_cooldown_seconds": {
     "description": "主动分析冷却时间（秒）",
     "type": "int",
-    "slider": {"min": 15, "max": 900, "step": 15},
+    "slider": {
+      "min": 15,
+      "max": 900,
+      "step": 15
+    },
     "default": 45
   },
   "llm_timeout_seconds": {
     "description": "音乐决策模型超时（秒）",
     "type": "int",
-    "slider": {"min": 2, "max": 25, "step": 1},
+    "slider": {
+      "min": 2,
+      "max": 25,
+      "step": 1
+    },
     "default": 12,
     "hint": "与2秒事件合并、1秒轮询和1秒发送超时共同限制总延迟。"
   }

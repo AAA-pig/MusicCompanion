@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 .venv/
@@ -14,3 +14,7 @@ evidence/
 music_companion_plugin_trace.jsonl
 ProcessLoopback.exe
 .pytest_cache/
+
+# 本地运行库（每台机器自己生成）
+music.db
+

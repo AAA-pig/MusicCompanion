@@ -11,6 +11,25 @@
     "default": "C:\\Users\\20708\\Desktop\\音乐伴侣\\music_companion_iteration_001\\music_companion",
     "hint": "monitor_audio.py 生成 audio_events_*.jsonl 的目录；插件启动时不回放历史事件。"
   },
+  "memory_enabled": {
+    "description": "启用音乐行为记忆",
+    "type": "bool",
+    "default": true,
+    "hint": "只记可数的行为：听了多久、跳没跳过、几点在听。不存音频、不存歌词，也无法从记忆里还原播放内容。"
+  },
+  "memory_db": {
+    "description": "音乐记忆数据库路径",
+    "type": "string",
+    "default": "",
+    "hint": "留空时使用日志目录下的 music.db；与对话记忆分开存放，互不影响。"
+  },
+  "session_gap_seconds": {
+    "description": "听歌会话切分间隔（秒）",
+    "type": "int",
+    "slider": {"min": 60, "max": 1800, "step": 60},
+    "default": 300,
+    "hint": "连续播放、中断不超过这个时长算同一段；一段结束才写一条汇总，避免逐首刷流水。"
+  },
   "proactive_enabled": {
     "description": "允许音乐事件触发主动消息",
     "type": "bool",

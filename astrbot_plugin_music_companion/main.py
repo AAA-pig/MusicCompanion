@@ -17,8 +17,26 @@ from .bridge import (
     JsonlTailer,
     MusicEventState,
     build_decision_prompt,
+    observation_from_record,
     parse_decision,
 )
+
+try:  # 记忆层是独立包；未安装时整体降级，不影响原有事件链路。
+    from music_companion.music_memory import MusicMemory
+    from music_companion.music_playlog import PlayLogRecorder, TrackObservation
+except ImportError:  # pragma: no cover - 取决于部署方式
+    MusicMemory = None  # type: ignore[assignment]
+
+
+def _observed_at(value: Any) -> datetime:
+    """Prefer the log timestamp; fall back to now so a clock skew never crashes."""
+    text = str(value or "").strip()
+    if text:
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc)
 
 
 @register(
@@ -44,6 +62,11 @@ class MusicCompanionPlugin(Star):
         self._skip_trace_reason: str | None = None
         self._stopping = asyncio.Event()
         self._poll_task: asyncio.Task | None = None
+        self.memory_enabled = bool(config.get("memory_enabled", True)) and MusicMemory is not None
+        self.session_gap_seconds = float(config.get("session_gap_seconds", 300))
+        self._memory_db = str(config.get("memory_db") or "").strip()
+        self.memory: Any = None
+        self.recorder: Any = None
 
     def _trace(self, event: str, **fields: Any) -> None:
         try:
@@ -66,6 +89,7 @@ class MusicCompanionPlugin(Star):
         if self.enabled and (self._poll_task is None or self._poll_task.done()):
             self._stopping.clear()
             self._poll_task = asyncio.create_task(self._poll_loop())
+        self._open_memory()
         self._trace(
             "startup",
             enabled=self.enabled,
@@ -77,12 +101,65 @@ class MusicCompanionPlugin(Star):
             log_dir=str(self.log_dir),
         )
 
+    def _open_memory(self) -> None:
+        if not self.memory_enabled or self.recorder is not None:
+            return
+        db_path = Path(self._memory_db) if self._memory_db else self.log_dir / "music.db"
+        try:
+            self.memory = MusicMemory(db_path, session_gap_seconds=self.session_gap_seconds)
+            self.recorder = PlayLogRecorder(self.memory)
+            self._trace("memory_ready", db_path=str(db_path))
+        except Exception as exc:
+            self.memory = None
+            self.recorder = None
+            self._trace("memory_failed", error=str(exc)[:120])
+            logger.warning("[MusicCompanion] 音乐记忆层不可用：%s", str(exc)[:180])
+
+    def _feed_memory(self, records: list[Any]) -> None:
+        """把音乐上下文快照喂给记忆层。采集中断不参与判定，也不进记忆。"""
+        if self.recorder is None:
+            return
+        for item in records:
+            mapped = observation_from_record(item.record)
+            if mapped is None:
+                continue
+            try:
+                written = self.recorder.observe(
+                    TrackObservation(
+                        observed_at=_observed_at(mapped["logged_at_utc"]),
+                        title=mapped["title"],
+                        artist=mapped["artist"],
+                        album=mapped["album"],
+                        position_seconds=mapped["position_seconds"],
+                        duration_seconds=mapped["duration_seconds"],
+                        playback_status=mapped["playback_status"],
+                    )
+                )
+            except Exception as exc:
+                self._trace("memory_error", error=str(exc)[:120])
+                continue
+            for text in written:
+                self._trace("memory_note", text=text[:200])
+
     async def terminate(self) -> None:
         self._stopping.set()
         if self._poll_task is not None and not self._poll_task.done():
             self._poll_task.cancel()
             await asyncio.gather(self._poll_task, return_exceptions=True)
         self.tailer.close()
+        if self.recorder is not None:
+            try:
+                for text in self.recorder.flush():
+                    self._trace("memory_note", text=text[:200], at="terminate")
+            except Exception as exc:
+                logger.warning("[MusicCompanion] 收尾写入音乐记忆失败：%s", str(exc)[:180])
+        if self.memory is not None:
+            try:
+                self.memory.close()
+            except Exception:
+                pass
+            self.memory = None
+            self.recorder = None
 
     async def _poll_loop(self) -> None:
         while not self._stopping.is_set():
@@ -103,6 +180,7 @@ class MusicCompanionPlugin(Star):
             logger.warning("[MusicCompanion] %s", error)
         now = time.monotonic()
         self.state.ingest(batch.records, now)
+        self._feed_memory(batch.records)
         records = self.state.due_batch(now)
         if not records:
             return

@@ -59,7 +59,7 @@ class JsonlTailer:
                         candidates.append((path.stat().st_mtime_ns, path))
                 except OSError:
                     continue
-        latest = max(candidates, default=(0, None), key=lambda item: item[0])[1]
+        latest = max(candidates, default=None, key=lambda item: (item[0], item[1].name))[1]
         if latest == self.path:
             return
         self.close()
@@ -253,3 +253,35 @@ def parse_decision(text: str, *, max_message_chars: int = 240) -> tuple[bool, st
     if not message:
         return False, ""
     return True, message[:max_message_chars].rstrip()
+
+MEMORY_EVENT_TYPES = {"track_observed", "track_changed", "playback_changed"}
+
+
+def _finite_or_none(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def observation_from_record(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Pick the fields the memory layer needs from one tailed JSONL record.
+
+    Returns None for anything the memory layer must not see: capture gaps,
+    unavailable snapshots and events from other apps.
+    """
+    if str(record.get("kind") or "") != "music_context_event":
+        return None
+    if str(record.get("type") or "") not in MEMORY_EVENT_TYPES:
+        return None
+    context = record.get("music_context")
+    if not isinstance(context, dict) or not context.get("available"):
+        return None
+    return {
+        "logged_at_utc": str(record.get("logged_at_utc") or ""),
+        "title": context.get("title"),
+        "artist": context.get("artist"),
+        "album": context.get("album"),
+        "position_seconds": _finite_or_none(context.get("position_seconds")),
+        "duration_seconds": _finite_or_none(context.get("duration_seconds")),
+        "playback_status": str(context.get("playback_status") or "unknown"),
+    }

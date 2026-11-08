@@ -18,6 +18,9 @@ TRIGGER_TYPES = {
     "texture_change",
     "rhythm_change",
 }
+# 换歌和播放状态是低频、高信息量的事件，丢掉就补不回来了；
+# 它们不受声学冷却限制，否则一次 45 秒冷却就能吃掉一次整首换歌。
+URGENT_TYPES = {"track_changed", "playback_changed"}
 MAX_READ_BYTES = 1024 * 1024
 MAX_LINE_BYTES = 128 * 1024
 DECISION_SYSTEM_PROMPT = """你是这台只属于一个人的私人电台的主持人，也是那个人熟悉的、会在歌与歌之间开口的声音。
@@ -201,8 +204,18 @@ class MusicEventState:
         pending = list(self._pending)
         self._pending.clear()
         fresh = [entry for entry in pending if now - entry.received_at <= 15]
-        if not fresh or now - self._last_analysis_at < self.cooldown_seconds:
+        if not fresh:
             return []
+        if now - self._last_analysis_at < self.cooldown_seconds:
+            urgent = [
+                entry
+                for entry in fresh
+                if str(entry.item.record.get("type") or "") in URGENT_TYPES
+            ]
+            if not urgent:
+                return []
+            self._last_analysis_at = now
+            return [entry.item for entry in urgent[-8:]]
         self._last_analysis_at = now
         return [entry.item for entry in fresh[-8:]]
 

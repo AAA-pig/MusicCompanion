@@ -91,7 +91,8 @@ class PlayLogRecorder:
 
         gap = (observed_at - self._current["last_observed_at"]).total_seconds()
         if observation.identity != self._current["identity"]:
-            written = self._finalize()
+            # 下一首开始即上一首结束，把这一刻交给 finalize 当收尾时间。
+            written = self._finalize(end_at=observed_at)
             self._start(observation)
             return written
         if gap > self.stale_after_seconds:
@@ -159,11 +160,11 @@ class PlayLogRecorder:
                 return advance
         return step
 
-    def _finalize(self) -> list[str]:
+    def _finalize(self, *, end_at: Optional[datetime] = None) -> list[str]:
         current, self._current = self._current, None
         if current is None:
             return []
-        played = self._played_seconds(current)
+        played = self._played_seconds(current, end_at=end_at)
         if played <= 0:
             return []
         record = PlayRecord(
@@ -177,11 +178,17 @@ class PlayLogRecorder:
         )
         return list(self.memory.record(record) or [])
 
-    def _played_seconds(self, current: dict[str, Any]) -> float:
+    def _played_seconds(
+        self, current: dict[str, Any], *, end_at: Optional[datetime] = None
+    ) -> float:
         """Prefer the position delta; fall back to accumulated playing time."""
         by_position = 0.0
         first, last = current["first_position"], current["last_position"]
         if first is not None and last is not None and last >= first:
             by_position = last - first
         played = max(current["playing_seconds"], by_position)
+        if played <= 0 and end_at is not None:
+            # 系统没给播放进度时，只被观察到一次的歌算不出播放时长。
+            # 下一首开始说明这首确实播过，用墙钟兜底，上限仍是 max_played_seconds。
+            played = (end_at - current["started_at"]).total_seconds()
         return min(max(played, 0.0), self.max_played_seconds)

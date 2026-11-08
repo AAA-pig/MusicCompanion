@@ -45,6 +45,13 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual(self.sink.records, [])
         self.assertEqual(self.recorder.current_title, "A")
 
+    def test_single_observation_track_is_recorded_when_position_is_missing(self):
+        # Windows 常常不给播放进度：一首歌只会被看到一次，换歌那一刻就是它的收尾。
+        self.recorder.observe(obs("A", 0, position=None))
+        self.recorder.observe(obs("B", 245, position=None))
+        self.assertEqual([record.title for record in self.sink.records], ["A"])
+        self.assertAlmostEqual(self.sink.records[0].played_seconds, 245.0, places=3)
+
     def test_track_change_emits_one_finished_record(self):
         self.recorder.observe(obs("A", 0, position=0))
         for second in (60, 120, 180, 235):

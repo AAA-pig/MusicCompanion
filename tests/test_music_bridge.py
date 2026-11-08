@@ -208,6 +208,16 @@ class MusicEventStateTests(unittest.TestCase):
         state.ingest([item("playback_changed", logged="2026-11-07T00:00:46+00:00")], 46)
         self.assertEqual(len(state.due_batch(48)), 1)
 
+    def test_track_change_is_not_swallowed_by_acoustic_cooldown(self):
+        state = MusicEventState(coalesce_seconds=2, cooldown_seconds=45)
+        state.ingest([item()], 0)
+        self.assertEqual(len(state.due_batch(2)), 1)
+        state.ingest([item("energy_rise", kind="event", logged="2026-11-07T00:00:03+00:00")], 3)
+        self.assertEqual(state.due_batch(5), [])
+        state.ingest([item("track_changed", logged="2026-11-07T00:00:10+00:00")], 10)
+        batch = state.due_batch(12)
+        self.assertEqual([entry.record["type"] for entry in batch], ["track_changed"])
+
     def test_stale_snapshot_is_not_injected_as_current(self):
         state = MusicEventState()
         state.ingest([item("track_observed")], 0)

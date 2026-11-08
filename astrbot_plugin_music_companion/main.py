@@ -4,6 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
 import time
 from typing import Any
 
@@ -17,15 +18,38 @@ from .bridge import (
     JsonlTailer,
     MusicEventState,
     build_decision_prompt,
+    format_note_lines,
+    format_track_lines,
     observation_from_record,
     parse_decision,
 )
 
-try:  # 记忆层是独立包；未安装时整体降级，不影响原有事件链路。
-    from music_companion.music_memory import MusicMemory
-    from music_companion.music_playlog import PlayLogRecorder, TrackObservation
-except ImportError:  # pragma: no cover - 取决于部署方式
-    MusicMemory = None  # type: ignore[assignment]
+
+def _import_memory_layer(log_dir: Path) -> tuple[Any, Any, Any]:
+    """记忆层是独立包。先直接导入，失败时从日志目录附近的 src 兜底。"""
+
+    def attempt() -> tuple[Any, Any, Any]:
+        from music_companion.music_memory import MusicMemory
+        from music_companion.music_playlog import PlayLogRecorder, TrackObservation
+
+        return MusicMemory, PlayLogRecorder, TrackObservation
+
+    try:
+        return attempt()
+    except ImportError:
+        pass
+    for base in (log_dir, log_dir.parent, log_dir.parent.parent):
+        src = base / "src"
+        if not (src / "music_companion" / "music_memory.py").is_file():
+            continue
+        entry = str(src)
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
+        try:
+            return attempt()
+        except ImportError:
+            return None, None, None
+    return None, None, None
 
 
 def _observed_at(value: Any) -> datetime:
@@ -62,7 +86,10 @@ class MusicCompanionPlugin(Star):
         self._skip_trace_reason: str | None = None
         self._stopping = asyncio.Event()
         self._poll_task: asyncio.Task | None = None
-        self.memory_enabled = bool(config.get("memory_enabled", True)) and MusicMemory is not None
+        self._memory_layer = _import_memory_layer(self.log_dir)
+        self.memory_enabled = (
+            bool(config.get("memory_enabled", True)) and self._memory_layer[0] is not None
+        )
         self.session_gap_seconds = float(config.get("session_gap_seconds", 300))
         self._memory_db = str(config.get("memory_db") or "").strip()
         self.memory: Any = None
@@ -104,10 +131,13 @@ class MusicCompanionPlugin(Star):
     def _open_memory(self) -> None:
         if not self.memory_enabled or self.recorder is not None:
             return
+        memory_cls, recorder_cls, _ = self._memory_layer
+        if memory_cls is None or recorder_cls is None:
+            return
         db_path = Path(self._memory_db) if self._memory_db else self.log_dir / "music.db"
         try:
-            self.memory = MusicMemory(db_path, session_gap_seconds=self.session_gap_seconds)
-            self.recorder = PlayLogRecorder(self.memory)
+            self.memory = memory_cls(db_path, session_gap_seconds=self.session_gap_seconds)
+            self.recorder = recorder_cls(self.memory)
             self._trace("memory_ready", db_path=str(db_path))
         except Exception as exc:
             self.memory = None
@@ -119,13 +149,16 @@ class MusicCompanionPlugin(Star):
         """把音乐上下文快照喂给记忆层。采集中断不参与判定，也不进记忆。"""
         if self.recorder is None:
             return
+        observation_cls = self._memory_layer[2]
+        if observation_cls is None:
+            return
         for item in records:
             mapped = observation_from_record(item.record)
             if mapped is None:
                 continue
             try:
                 written = self.recorder.observe(
-                    TrackObservation(
+                    observation_cls(
                         observed_at=_observed_at(mapped["logged_at_utc"]),
                         title=mapped["title"],
                         artist=mapped["artist"],
@@ -286,3 +319,88 @@ class MusicCompanionPlugin(Star):
         section = self.state.context_prompt(time.monotonic())
         if section:
             req.system_prompt = str(getattr(req, "system_prompt", "") or "") + "\n\n" + section
+
+    # ------------------------------------------------------------- memory read
+
+    def _music_memory_text(self, action: str) -> str:
+        if self.memory is None:
+            return "音乐记忆还没打开，记忆层没加载上呢。"
+        key = action.strip().lower()
+        if key in {"日记", "今天", "今日", "diary"}:
+            return "今天的听歌日记：\n" + self.memory.build_diary()
+        if key in {"常听", "最爱", "喜欢", "favourite", "favorite"}:
+            lines = format_track_lines(self.memory.favourite_tracks(limit=5), limit=5)
+            return "常听的：\n" + "\n".join(lines) if lines else "还没听出常听的歌呢。"
+        if key in {"跳过", "不爱", "skipped"}:
+            lines = format_track_lines(
+                self.memory.skipped_tracks(limit=5), limit=5, mode="skipped"
+            )
+            return "老被跳过的：\n" + "\n".join(lines) if lines else "还没有老被跳过的歌。"
+        lines = format_note_lines(self.memory.recent_notes(limit=5), limit=5)
+        if not lines:
+            return "音乐记忆还是空的，最近没听出什么。"
+        return "最近：\n" + "\n".join(lines)
+
+    @filter.command("音乐记忆")
+    async def cmd_music_memory(self, event: AstrMessageEvent):
+        """音乐记忆：/音乐记忆 [常听|跳过|日记|最近]"""
+        if self.target_umo and event.unified_msg_origin != self.target_umo:
+            yield event.plain_result("这个只在本机主人的会话里开哦。")
+            return
+        raw = (event.get_message_str() or "").strip()
+        parts = raw.split(None, 1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        try:
+            text = self._music_memory_text(arg)
+        except Exception as exc:
+            logger.warning("[MusicCompanion] 读取音乐记忆失败：%s", str(exc)[:180])
+            text = "记忆读失败了，等会儿再翻一次吧。"
+        yield event.plain_result(text)
+
+    @filter.llm_tool(name="music_companion_recall")
+    async def music_companion_recall_tool(
+        self,
+        event: AstrMessageEvent,
+        action: str = "recent",
+        limit: int = 5,
+    ) -> str:
+        """查询本机最近的听歌行为记忆（听过什么、听多久、跳过哪些）。
+        只含可数的行为记录，不还原音频、歌词或播放内容；没有记录时如实返回空。
+
+        Args:
+            action(string): recent / favourite / skipped / diary / digest 之一，默认 recent
+            limit(int): 最多返回几条，默认 5，最多 10
+        """
+        if self.memory is None:
+            return json.dumps(
+                {"ok": False, "error": "memory_unavailable", "hint": "记忆层没有加载，不要编造听歌记录。"},
+                ensure_ascii=False,
+            )
+        count = max(1, min(10, int(limit or 5)))
+        key = str(action or "recent").strip().lower()
+        try:
+            if key in {"diary", "日记"}:
+                payload = {"ok": True, "action": "diary", "text": self.memory.build_diary()}
+            elif key in {"favourite", "favorite", "常听"}:
+                payload = {
+                    "ok": True,
+                    "action": "favourite",
+                    "tracks": self.memory.favourite_tracks(limit=count),
+                }
+            elif key in {"skipped", "跳过"}:
+                payload = {
+                    "ok": True,
+                    "action": "skipped",
+                    "tracks": self.memory.skipped_tracks(limit=count),
+                }
+            elif key == "digest":
+                payload = {"ok": True, "action": "digest", "text": self.memory.digest(limit=count)}
+            else:
+                payload = {
+                    "ok": True,
+                    "action": "recent",
+                    "notes": self.memory.recent_notes(limit=count),
+                }
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)[:120]}, ensure_ascii=False)
+        return json.dumps(payload, ensure_ascii=False)

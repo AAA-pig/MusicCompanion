@@ -38,6 +38,14 @@ def _install_astrbot_stubs() -> None:
         def on_llm_request(*args, **kwargs):
             return lambda function: function
 
+        @staticmethod
+        def command(*args, **kwargs):
+            return lambda function: function
+
+        @staticmethod
+        def llm_tool(*args, **kwargs):
+            return lambda function: function
+
     class MessageChain:
         def __init__(self, chain=None):
             self.chain = chain or []

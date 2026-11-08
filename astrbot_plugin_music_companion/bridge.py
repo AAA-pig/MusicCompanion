@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+from datetime import datetime
 import json
 import math
 from pathlib import Path
@@ -285,3 +286,55 @@ def observation_from_record(record: dict[str, Any]) -> dict[str, Any] | None:
         "duration_seconds": _finite_or_none(context.get("duration_seconds")),
         "playback_status": str(context.get("playback_status") or "unknown"),
     }
+
+
+# ---------------------------------------------------------------- memory read
+
+def _short_stamp(value: Any) -> str:
+    """只显示到分钟；解析不了就原样截一段，绝不因为格式差异抛错。"""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return text[:16]
+    return f"{moment.month}-{moment.day} {moment:%H:%M}"
+
+
+def format_note_lines(notes: list[dict[str, Any]], *, limit: int = 5) -> list[str]:
+    lines: list[str] = []
+    for row in list(notes or [])[:limit]:
+        if not isinstance(row, dict):
+            continue
+        text = re.sub(r"\s+", " ", str(row.get("text") or "")).strip()
+        if not text:
+            continue
+        stamp = _short_stamp(row.get("started_at"))
+        lines.append(f"- {stamp} {text}"[:200] if stamp else f"- {text}"[:200])
+    return lines
+
+
+def format_track_lines(
+    rows: list[dict[str, Any]],
+    *,
+    limit: int = 5,
+    mode: str = "listened",
+) -> list[str]:
+    lines: list[str] = []
+    for row in list(rows or [])[:limit]:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or "").strip()
+        if not title:
+            continue
+        artist = str(row.get("artist") or "").strip()
+        name = f"《{title}》" + (f"（{artist}）" if artist else "")
+        if mode == "skipped":
+            lines.append(f"- {name} 被跳过 {int(row.get('skipped') or 0)} 次")
+        else:
+            played = int(row.get("listened") or 0)
+            seconds = row.get("played_seconds")
+            tail = f"，累计 {int(seconds // 60)} 分钟" if isinstance(seconds, (int, float)) and seconds >= 60 else ""
+            lines.append(f"- {name} 完整听了 {played} 次{tail}")
+    return lines
